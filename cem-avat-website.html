@@ -1,0 +1,358 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Cem Avat — Medical Fitness & Performance</title>
+<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=Manrope:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg: #FAFAF8;
+  --bg-alt: #F2F1EE;
+  --surface: #EAEAE6;
+  --border: #DDDDD8;
+  --text: #1A1A18;
+  --text-secondary: #5A5A56;
+  --text-muted: #8A8A84;
+  --accent: #1A3A2A;
+  --accent-mid: #2D5E42;
+  --accent-light: #E8F0EB;
+  --gold: #B8963E;
+  --white: #FFFFFF;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{font-family:'Manrope',sans-serif;background:var(--bg);color:var(--text);overflow-x:hidden;-webkit-font-smoothing:antialiased}
+
+nav{position:fixed;top:0;left:0;right:0;z-index:100;padding:20px 60px;display:flex;justify-content:space-between;align-items:center;background:rgba(250,250,248,0.88);backdrop-filter:blur(24px);border-bottom:1px solid transparent;transition:all .4s}
+nav.scrolled{border-bottom-color:var(--border);padding:14px 60px}
+.nav-logo{font-family:'Outfit',sans-serif;font-size:20px;font-weight:800;letter-spacing:-0.5px;color:var(--accent)}
+.nav-logo span{color:var(--gold)}
+.nav-links{display:flex;gap:32px;list-style:none}
+.nav-links a{color:var(--text-secondary);text-decoration:none;font-size:13px;font-weight:600;letter-spacing:.5px;transition:color .3s}
+.nav-links a:hover{color:var(--accent)}
+.nav-cta{background:var(--accent);color:var(--white);padding:10px 28px;border:none;border-radius:6px;font-size:13px;font-weight:700;cursor:pointer;transition:all .3s;text-decoration:none;font-family:'Manrope',sans-serif}
+.nav-cta:hover{background:var(--accent-mid)}
+
+.hero{min-height:100vh;display:flex;align-items:center;padding:140px 60px 0;position:relative;overflow:hidden}
+.hero-content{max-width:560px;z-index:3;position:relative}
+.hero-tag{display:inline-flex;align-items:center;gap:10px;font-size:12px;font-weight:700;letter-spacing:2px;text-transform:uppercase;color:var(--accent-mid);margin-bottom:28px;background:var(--accent-light);padding:6px 16px;border-radius:4px}
+.hero h1{font-family:'Outfit',sans-serif;font-size:clamp(42px,6vw,72px);font-weight:800;line-height:1.08;letter-spacing:-2px;color:var(--text);margin-bottom:24px}
+.hero h1 span{color:var(--accent-mid)}
+.hero-desc{font-size:17px;line-height:1.75;color:var(--text-secondary);max-width:480px;margin-bottom:44px;font-weight:400}
+.hero-stats{display:flex;gap:40px}
+.hero-stat .num{font-family:'Outfit',sans-serif;font-size:40px;font-weight:800;color:var(--accent);letter-spacing:-1px;line-height:1}
+.hero-stat .label{font-size:12px;letter-spacing:.5px;color:var(--text-muted);margin-top:6px;font-weight:600}
+
+.hero-visual{position:absolute;right:0;top:0;bottom:0;width:48%;z-index:1;display:flex;align-items:flex-end;justify-content:center;pointer-events:none}
+.hero-visual::before{content:'';position:absolute;right:8%;left:14%;top:10%;bottom:0;background:linear-gradient(180deg,var(--accent-mid) 0%,var(--accent) 100%);border-radius:300px 300px 0 0;z-index:0}
+.hero-visual::after{content:'';position:absolute;right:6%;top:16%;width:150px;height:150px;border:2px solid var(--gold);border-radius:50%;opacity:.35;z-index:0}
+.hero-portrait{position:relative;z-index:2;height:88%;filter:drop-shadow(0 28px 48px rgba(0,0,0,.22))}
+.hero-portrait img{height:100%;width:auto;display:block}
+.hero-badge{position:absolute;right:4%;bottom:22%;z-index:3;background:var(--white);padding:18px 22px;border-radius:12px;box-shadow:0 20px 40px rgba(26,58,42,.14);border:1px solid var(--border);min-width:220px;pointer-events:auto}
+.hero-badge .label{font-family:'Outfit',sans-serif;font-size:11px;font-weight:700;letter-spacing:2px;text-transform:uppercase;color:var(--gold);margin-bottom:8px}
+.hero-badge .title{font-family:'Outfit',sans-serif;font-size:18px;font-weight:800;color:var(--accent);letter-spacing:-0.5px;line-height:1.25;margin-bottom:6px}
+.hero-badge .meta{font-size:12px;color:var(--text-muted);font-weight:600;letter-spacing:.3px}
+
+section{padding:100px 60px;position:relative}
+.section-tag{font-size:12px;font-weight:700;letter-spacing:2px;text-transform:uppercase;color:var(--accent-mid);margin-bottom:12px}
+.section-title{font-family:'Outfit',sans-serif;font-size:clamp(28px,3.5vw,42px);font-weight:800;color:var(--text);margin-bottom:56px;line-height:1.15;letter-spacing:-1px}
+
+.about-grid{display:grid;grid-template-columns:1.2fr 1fr;gap:72px;align-items:start}
+.about-text p{font-size:16px;line-height:1.85;color:var(--text-secondary);margin-bottom:20px;font-weight:400}
+.about-values{display:flex;flex-direction:column;gap:28px}
+.about-value{padding:24px 28px;background:var(--white);border:1px solid var(--border);border-radius:8px;transition:all .3s}
+.about-value:hover{border-color:var(--accent-mid);box-shadow:0 4px 20px rgba(0,0,0,.04)}
+.about-value h4{font-family:'Outfit',sans-serif;font-size:15px;font-weight:700;color:var(--accent);margin-bottom:6px}
+.about-value p{font-size:14px;color:var(--text-secondary);line-height:1.7;font-weight:400}
+
+.services-section{background:var(--white)}
+.services-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:20px}
+.service-card{padding:40px 32px;background:var(--bg);border:1px solid var(--border);border-radius:10px;transition:all .35s;position:relative;overflow:hidden}
+.service-card:hover{border-color:var(--accent-mid);transform:translateY(-4px);box-shadow:0 12px 40px rgba(0,0,0,.06)}
+.service-card::after{content:'';position:absolute;bottom:0;left:0;right:0;height:3px;background:var(--accent);transform:scaleX(0);transition:transform .35s;border-radius:0 0 10px 10px}
+.service-card:hover::after{transform:scaleX(1)}
+.service-num{font-family:'Outfit',sans-serif;font-size:48px;font-weight:800;color:var(--surface);line-height:1;margin-bottom:20px}
+.service-card h3{font-family:'Outfit',sans-serif;font-size:18px;font-weight:700;color:var(--text);margin-bottom:12px;letter-spacing:-0.3px}
+.service-card p{font-size:14px;line-height:1.75;color:var(--text-secondary);font-weight:400}
+
+.cred-grid{display:grid;grid-template-columns:1fr 1fr;gap:56px}
+.cred-block h3{font-family:'Outfit',sans-serif;font-size:20px;color:var(--text);margin-bottom:24px;font-weight:700;letter-spacing:-0.3px}
+.cred-item{padding:18px 0;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:baseline;gap:16px}
+.cred-item .name{font-size:14px;font-weight:600;color:var(--text)}
+.cred-item .org{font-size:13px;color:var(--accent-mid);margin-top:3px}
+.cred-item .meta{font-size:12px;color:var(--text-muted);font-weight:600;white-space:nowrap}
+
+.achievements-section{background:var(--accent);color:var(--white)}
+.achievements-section .section-tag{color:rgba(255,255,255,.5)}
+.achievements-section .section-title{color:var(--white)}
+.ach-grid{display:flex;gap:16px;flex-wrap:wrap;margin-bottom:56px}
+.ach-card{flex:1;min-width:240px;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.12);border-radius:10px;padding:28px 24px;backdrop-filter:blur(8px);transition:background .3s}
+.ach-card:hover{background:rgba(255,255,255,.12)}
+.ach-card .year{font-family:'Outfit',sans-serif;font-size:13px;font-weight:700;opacity:.4;letter-spacing:1px;margin-bottom:10px}
+.ach-card .rank{font-size:12px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:var(--gold);margin-bottom:10px}
+.ach-card h4{font-size:15px;font-weight:600;line-height:1.5;margin-bottom:6px}
+.ach-card .cat{font-size:13px;opacity:.5}
+.ach-summary{display:flex;gap:56px;padding-top:40px;border-top:1px solid rgba(255,255,255,.15)}
+.ach-summary .num{font-family:'Outfit',sans-serif;font-size:44px;font-weight:800;line-height:1;color:var(--gold)}
+.ach-summary .label{font-size:12px;font-weight:600;opacity:.5;margin-top:6px;letter-spacing:.5px}
+
+.refs-row{display:flex;gap:20px;flex-wrap:wrap;margin-top:48px}
+.ref-card{flex:1;min-width:240px;background:var(--white);border:1px solid var(--border);border-radius:10px;padding:28px;border-left:4px solid var(--accent)}
+.ref-card .ref-name{font-weight:700;color:var(--text);font-size:15px}
+.ref-card .ref-title{font-size:13px;color:var(--text-secondary);margin-top:4px;line-height:1.5}
+.ref-card .ref-email{font-size:13px;color:var(--accent-mid);margin-top:10px;font-weight:500}
+
+.contact-section{background:var(--white)}
+.contact-cards{display:grid;grid-template-columns:repeat(3,1fr);gap:20px;max-width:1100px}
+.contact-card{display:flex;flex-direction:column;align-items:flex-start;gap:10px;padding:36px 32px;background:var(--bg);border:1px solid var(--border);border-radius:10px;text-decoration:none;transition:all .35s;position:relative;overflow:hidden}
+.contact-card::after{content:'';position:absolute;bottom:0;left:0;right:0;height:3px;background:var(--accent);transform:scaleX(0);transition:transform .35s;border-radius:0 0 10px 10px}
+.contact-card:hover{border-color:var(--accent-mid);transform:translateY(-4px);box-shadow:0 12px 40px rgba(0,0,0,.06)}
+.contact-card:hover::after{transform:scaleX(1)}
+.contact-card .icon{width:48px;height:48px;border-radius:10px;background:var(--accent-light);color:var(--accent);display:flex;align-items:center;justify-content:center;font-size:20px;margin-bottom:8px}
+.contact-card .label{font-size:11px;letter-spacing:1.5px;text-transform:uppercase;color:var(--text-muted);font-weight:700}
+.contact-card .value{font-size:15px;color:var(--text);font-weight:600;line-height:1.6}
+
+.gallery-section{background:var(--bg-alt)}
+.gallery-grid{columns:3;column-gap:16px}
+.gallery-item{break-inside:avoid;margin-bottom:16px;border-radius:10px;overflow:hidden;cursor:pointer;position:relative;background:var(--surface);display:block}
+.gallery-item img{width:100%;height:auto;display:block;transition:transform .6s ease,filter .4s ease;will-change:transform}
+.gallery-item::after{content:'';position:absolute;inset:0;background:linear-gradient(180deg,transparent 55%,rgba(26,58,42,.45) 100%);opacity:0;transition:opacity .35s}
+.gallery-item:hover::after{opacity:1}
+.gallery-item:hover img{transform:scale(1.04);filter:brightness(1.02)}
+
+.lightbox{position:fixed;inset:0;background:rgba(12,12,10,.94);z-index:200;display:none;align-items:center;justify-content:center;padding:40px;backdrop-filter:blur(6px)}
+.lightbox.active{display:flex}
+.lightbox img{max-width:92vw;max-height:88vh;object-fit:contain;border-radius:6px;box-shadow:0 20px 60px rgba(0,0,0,.5)}
+.lightbox-close,.lightbox-prev,.lightbox-next{position:absolute;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.18);color:#fff;width:48px;height:48px;border-radius:50%;cursor:pointer;font-size:20px;display:flex;align-items:center;justify-content:center;transition:background .25s;font-family:'Outfit',sans-serif}
+.lightbox-close:hover,.lightbox-prev:hover,.lightbox-next:hover{background:rgba(255,255,255,.18)}
+.lightbox-close{top:28px;right:28px}
+.lightbox-prev{left:28px;top:50%;transform:translateY(-50%)}
+.lightbox-next{right:28px;top:50%;transform:translateY(-50%)}
+.lightbox-counter{position:absolute;bottom:28px;left:50%;transform:translateX(-50%);color:rgba(255,255,255,.6);font-family:'Outfit',sans-serif;font-size:13px;font-weight:600;letter-spacing:2px}
+
+footer{padding:36px 60px;display:flex;justify-content:space-between;align-items:center;border-top:1px solid var(--border);font-size:13px;color:var(--text-muted)}
+footer a{color:var(--accent-mid);text-decoration:none;font-weight:600}
+
+@media(max-width:960px){
+  nav{padding:14px 20px}
+  .nav-links{display:none}
+  section,.hero{padding-left:20px;padding-right:20px}
+  .hero-visual{display:none}
+  .about-grid,.cred-grid{grid-template-columns:1fr;gap:36px}
+  .contact-cards{grid-template-columns:1fr;gap:14px}
+  .services-grid{grid-template-columns:1fr}
+  .hero-stats{gap:24px;flex-wrap:wrap}
+  .ach-summary{gap:28px;flex-wrap:wrap}
+  .ach-grid{flex-direction:column}
+  .refs-row{flex-direction:column}
+  .gallery-grid{columns:2;column-gap:12px}
+  .gallery-item{margin-bottom:12px}
+  .lightbox{padding:16px}
+  .lightbox-close,.lightbox-prev,.lightbox-next{width:40px;height:40px;font-size:16px}
+  .lightbox-close{top:16px;right:16px}
+  .lightbox-prev{left:12px}
+  .lightbox-next{right:12px}
+}
+@media(max-width:600px){
+  .gallery-grid{columns:1}
+}
+</style>
+</head>
+<body>
+
+<nav id="navbar">
+  <div class="nav-logo">CEM<span>.</span>AVAT</div>
+  <ul class="nav-links">
+    <li><a href="#about">Hakkımda</a></li>
+    <li><a href="#services">Hizmetler</a></li>
+    <li><a href="#credentials">Yetkinlikler</a></li>
+    <li><a href="#achievements">Başarılar</a></li>
+    <li><a href="#gallery">Galeri</a></li>
+    <li><a href="#contact">İletişim</a></li>
+  </ul>
+  <a href="https://wa.me/905512327468?text=Merhaba%20Cem%20Bey%2C%20randevu%20almak%20istiyorum." target="_blank" rel="noopener" class="nav-cta">Randevu Al</a>
+</nav>
+
+<section class="hero">
+  <div class="hero-content">
+    <div class="hero-tag">Fitness • Kürek • Medical Fitness</div>
+    <h1>Fitness, Kürek ve Medical Fitness Alanlarında<br><span>Uzmanlaşmış Antrenör.</span></h1>
+    <p class="hero-desc">Cem Avat, bireylerin hareket kalitesini, fiziksel kapasitesini ve performansını geliştirmeye yönelik; fitness, kürek ve medical fitness odaklı antrenman programları sunar.</p>
+    <div class="hero-stats">
+      <div class="hero-stat"><div class="num">12+</div><div class="label">Yıl Deneyim</div></div>
+      <div class="hero-stat"><div class="num">16</div><div class="label">Ulusal Birincilik</div></div>
+      <div class="hero-stat"><div class="num">4</div><div class="label">Uluslararası Madalya</div></div>
+    </div>
+  </div>
+  <div class="hero-visual">
+    <div class="hero-portrait">
+      <img src="assets/cem-hero.png" alt="Cem Avat — Fitness, Kürek ve Medical Fitness Antrenörü" loading="eager" decoding="async">
+    </div>
+    <div class="hero-badge">
+      <div class="label">Fenerbahçe S.K.</div>
+      <div class="title">Fitness ve Kürek Antrenörü</div>
+      <div class="meta">2022 — Günümüz</div>
+    </div>
+  </div>
+</section>
+
+<section id="about">
+  <div class="section-tag">Hakkımda</div>
+  <div class="section-title">Antrenörlükte disiplin, hareket kalitesi ve performans odağı.</div>
+  <div class="about-grid">
+    <div class="about-text">
+      <p>Cem Avat, fitness, kürek ve medical fitness alanlarında uzmanlaşmış bir antrenör olarak; bireylerin güç, dayanıklılık, hareket kalitesi ve fiziksel performanslarını geliştirmeye yönelik programlar hazırlar. Sporculuk geçmişi ile antrenörlük deneyimini aynı çizgide birleştirerek hem bireysel hem kurumsal düzeyde çalışma yürütür.</p>
+      <p>Çalışma yaklaşımında amaç; kişiye uygun egzersiz planlaması, sürdürülebilir gelişim ve doğru hareket alışkanlığı oluşturmaktır. Genel fitness hedeflerinden performans gelişimine, aktif yaşama geçiş sürecinden hareket kalitesini destekleyen antrenmanlara kadar farklı ihtiyaçlara antrenör bakış açısıyla çözüm üretir.</p>
+    </div>
+    <div class="about-values">
+      <div class="about-value"><h4>Sorumluluk Bilinci</h4><p>Hem bireysel danışanlarla hem de ekip içinde verimli ve uyumlu bir şekilde çalışarak, bulunduğum ortama katkı sağlamayı öncelik olarak görüyorum.</p></div>
+      <div class="about-value"><h4>Sürekli Gelişim</h4><p>Güncel bilimsel çalışmalar ve yeni yaklaşımlar doğrultusunda bilgi birikimimi artırmaya devam ediyorum.</p></div>
+      <div class="about-value"><h4>Sürdürülebilir Gelişim</h4><p>İnsanların hareket kapasitesini, performansını ve egzersiz alışkanlıklarını uzun vadede güçlendiren çalışmalar üretmek.</p></div>
+    </div>
+  </div>
+</section>
+
+<section id="services" class="services-section">
+  <div class="section-tag">Hizmetler</div>
+  <div class="section-title">Uzmanlık Alanları</div>
+  <div class="services-grid">
+    <div class="service-card"><div class="service-num">01</div><h3>Medical Fitness</h3><p>Hareket kalitesini desteklemeye, fiziksel kapasiteyi artırmaya ve egzersize kontrollü şekilde uyum sağlamaya yönelik antrenman planları.</p></div>
+    <div class="service-card"><div class="service-num">02</div><h3>Kişisel Antrenman</h3><p>Bireysel hedeflere, kondisyon seviyesine ve yaşam düzenine göre yapılandırılan fitness programları. Güç, dayanıklılık ve genel fiziksel form odağı.</p></div>
+    <div class="service-card"><div class="service-num">03</div><h3>Fonksiyonel Antrenman</h3><p>Denge, koordinasyon, mobilite ve temel kuvvet gelişimini destekleyen; günlük yaşam ve sportif ihtiyaçlara uyarlanmış egzersiz uygulamaları.</p></div>
+    <div class="service-card"><div class="service-num">04</div><h3>Performans Geliştirme</h3><p>Sporcular için fiziksel hazırlık, kuvvet gelişimi ve performans odaklı antrenman planlaması. Branşa ve hedefe göre yapılandırılmış çalışma yaklaşımı.</p></div>
+    <div class="service-card"><div class="service-num">05</div><h3>Kürek Antrenörlüğü</h3><p>Kürek branşına yönelik kondisyon, kuvvet ve destekleyici kara antrenmanı planlamaları. Sporcu geçmişi ve kulüp deneyimiyle yapılandırılmış antrenörlük yaklaşımı.</p></div>
+    <div class="service-card"><div class="service-num">06</div><h3>Korektif Egzersiz Yaklaşımı</h3><p>Doğru hareket alışkanlığını destekleyen, mobilite ve dengeyi geliştirmeye odaklanan egzersiz uygulamalarıyla antrenman kalitesini güçlendirme.</p></div>
+  </div>
+</section>
+
+<section id="credentials">
+  <div class="section-tag">Yetkinlikler</div>
+  <div class="section-title">Eğitim & Sertifikalar</div>
+  <div class="cred-grid">
+    <div class="cred-block">
+      <h3>Akademik & Deneyim</h3>
+      <div class="cred-item"><div><div class="name">Beden Eğitimi ve Spor Öğretmenliği — Lisans</div><div class="org">Marmara Üniversitesi</div></div><div class="meta">2018–2022</div></div>
+      <div class="cred-item"><div><div class="name">Fitness Antrenörü</div><div class="org">Fenerbahçe Spor Kulübü</div></div><div class="meta">2022–Günümüz</div></div>
+      <div class="cred-item"><div><div class="name">Kürek Antrenörü</div><div class="org">Fenerbahçe Spor Kulübü</div></div><div class="meta">2019–2022</div></div>
+    </div>
+    <div class="cred-block">
+      <h3>Sertifikalar</h3>
+      <div class="cred-item"><div><div class="name">EQF Level 4 — Personal Trainer</div><div class="org">TREPS / EREPS</div></div><div class="meta">Aktif</div></div>
+      <div class="cred-item"><div><div class="name">Functional Training</div><div class="org">TREPS / EREPS</div></div><div class="meta">Aktif</div></div>
+      <div class="cred-item"><div><div class="name">Corrective Exercise Specialist</div><div class="org">FMI</div></div><div class="meta">Aktif</div></div>
+      <div class="cred-item"><div><div class="name">1. & 2. Kademe Kürek Antrenörlüğü</div><div class="org">Türkiye Kürek Federasyonu</div></div><div class="meta">Aktif</div></div>
+      <div class="cred-item"><div><div class="name">2. Kademe Fitness Antrenörlüğü</div><div class="org">GSGM</div></div><div class="meta">Aktif</div></div>
+    </div>
+  </div>
+  <div style="margin-top:64px">
+    <h3 style="font-family:'Outfit',sans-serif;font-size:20px;font-weight:700;color:var(--text);margin-bottom:24px;letter-spacing:-0.3px">Referanslar</h3>
+    <div class="refs-row">
+      <div class="ref-card"><div class="ref-name">Erhan Ertürk</div><div class="ref-title">Türkiye Kürek Federasyonu Başkanı</div><div class="ref-email">erhan_erturk@hotmail.com</div></div>
+      <div class="ref-card"><div class="ref-name">Yrd. Doç. Orkun Pelvan</div><div class="ref-title">Marmara Üniversitesi</div><div class="ref-email">orkunpelvan@gmail.com</div></div>
+      <div class="ref-card"><div class="ref-name">Ozan Bayülken</div><div class="ref-title">Fenerbahçe Kürek Şube Sorumlusu</div><div class="ref-email">ozan.bayulken@fenerbahce.org</div></div>
+    </div>
+  </div>
+</section>
+
+<section id="achievements" class="achievements-section">
+  <div class="section-tag">Başarılar</div>
+  <div class="section-title">Ulusal & Uluslararası Kürek Kariyeri</div>
+  <div class="ach-grid">
+    <div class="ach-card"><div class="year">2020</div><div class="rank">🥇 Birincilik</div><h4>Büyükler Türkiye Kupası ve Akademi Şampiyonası</h4><div class="cat">U23 Hafif Kilo Erkekler</div></div>
+    <div class="ach-card"><div class="year">2018</div><div class="rank">🥇 Birincilik</div><h4>Balkan Şampiyonası</h4><div class="cat">Genç Erkekler — Uluslararası</div></div>
+    <div class="ach-card"><div class="year">2018</div><div class="rank">🥇 Birincilik</div><h4>Gençler Türkiye Şampiyonası & Federasyon Kupası</h4><div class="cat">Genç Erkekler</div></div>
+    <div class="ach-card"><div class="year">2017</div><div class="rank">🥇 Birincilik</div><h4>Gençler Türkiye Şampiyonası</h4><div class="cat">Genç Erkekler</div></div>
+    <div class="ach-card"><div class="year">2016</div><div class="rank">🥉 Üçüncülük</div><h4>Balkan Şampiyonası</h4><div class="cat">Yıldız Erkekler — Uluslararası</div></div>
+  </div>
+  <div class="ach-summary">
+    <div><div class="num">16</div><div class="label">Birincilik</div></div>
+    <div><div class="num">4</div><div class="label">Uluslararası Müsabaka</div></div>
+    <div><div class="num">7</div><div class="label">Yıl Aktif Sporculuk</div></div>
+    <div><div class="num">3</div><div class="label">Farklı Yaş Kategorisi</div></div>
+  </div>
+</section>
+
+<section id="gallery" class="gallery-section">
+  <div class="section-tag">Galeri</div>
+  <div class="section-title">Antrenmandan Kareler</div>
+  <div class="gallery-grid">
+    <a class="gallery-item" data-idx="0"><img src="galery/1E7A6619.jpg" alt="Antrenman karesi" loading="lazy"></a>
+    <a class="gallery-item" data-idx="1"><img src="galery/1E7A6720.jpg" alt="Antrenman karesi" loading="lazy"></a>
+    <a class="gallery-item" data-idx="2"><img src="galery/1E7A6749.jpg" alt="Antrenman karesi" loading="lazy"></a>
+    <a class="gallery-item" data-idx="3"><img src="galery/1E7A6773.jpg" alt="Antrenman karesi" loading="lazy"></a>
+    <a class="gallery-item" data-idx="4"><img src="galery/1E7A6885.jpg" alt="Antrenman karesi" loading="lazy"></a>
+    <a class="gallery-item" data-idx="5"><img src="galery/1E7A6941.jpg" alt="Antrenman karesi" loading="lazy"></a>
+    <a class="gallery-item" data-idx="6"><img src="galery/1E7A6965.jpg" alt="Antrenman karesi" loading="lazy"></a>
+    <a class="gallery-item" data-idx="7"><img src="galery/1E7A7051.jpg" alt="Antrenman karesi" loading="lazy"></a>
+    <a class="gallery-item" data-idx="8"><img src="galery/1E7A7167.jpg" alt="Antrenman karesi" loading="lazy"></a>
+    <a class="gallery-item" data-idx="9"><img src="galery/1E7A7314.jpg" alt="Antrenman karesi" loading="lazy"></a>
+    <a class="gallery-item" data-idx="10"><img src="galery/1E7A7317.jpg" alt="Antrenman karesi" loading="lazy"></a>
+    <a class="gallery-item" data-idx="11"><img src="galery/1E7A7327.jpg" alt="Antrenman karesi" loading="lazy"></a>
+    <a class="gallery-item" data-idx="12"><img src="galery/1E7A7331.jpg" alt="Antrenman karesi" loading="lazy"></a>
+    <a class="gallery-item" data-idx="13"><img src="galery/1E7A7333.jpg" alt="Antrenman karesi" loading="lazy"></a>
+    <a class="gallery-item" data-idx="14"><img src="galery/1E7A7380.jpg" alt="Antrenman karesi" loading="lazy"></a>
+    <a class="gallery-item" data-idx="15"><img src="galery/1E7A7462.jpg" alt="Antrenman karesi" loading="lazy"></a>
+    <a class="gallery-item" data-idx="16"><img src="galery/1E7A7468.jpg" alt="Antrenman karesi" loading="lazy"></a>
+    <a class="gallery-item" data-idx="17"><img src="galery/1E7A7492.jpg" alt="Antrenman karesi" loading="lazy"></a>
+  </div>
+</section>
+
+<div class="lightbox" id="lightbox">
+  <button class="lightbox-close" aria-label="Kapat">✕</button>
+  <button class="lightbox-prev" aria-label="Önceki">‹</button>
+  <img id="lightbox-img" src="" alt="">
+  <button class="lightbox-next" aria-label="Sonraki">›</button>
+  <div class="lightbox-counter" id="lightbox-counter"></div>
+</div>
+
+<section id="contact" class="contact-section">
+  <div class="section-tag">İletişim</div>
+  <div class="section-title">Birlikte Çalışalım</div>
+  <div class="contact-cards">
+    <a class="contact-card" href="https://maps.google.com/?q=Fenerbahçe+Dereağzı+Tesisleri" target="_blank" rel="noopener">
+      <div class="icon">📍</div>
+      <div class="label">Adres</div>
+      <div class="value">Fenerbahçe Dereağzı Tesisleri<br>Zühtüpaşa Mah., Kadıköy / İstanbul</div>
+    </a>
+    <a class="contact-card" href="mailto:cemavat@gmail.com">
+      <div class="icon">📧</div>
+      <div class="label">E-Posta</div>
+      <div class="value">cemavat@gmail.com</div>
+    </a>
+    <a class="contact-card" href="tel:+905512327468">
+      <div class="icon">📞</div>
+      <div class="label">Telefon</div>
+      <div class="value">+90 551 232 74 68</div>
+    </a>
+  </div>
+</section>
+
+<footer>
+  <div>© 2026 Cem Avat — Medical Fitness & Performance</div>
+  <a href="#">Yukarı ↑</a>
+</footer>
+
+<script>
+window.addEventListener('scroll',()=>{document.getElementById('navbar').classList.toggle('scrolled',window.scrollY>60)});
+document.querySelectorAll('a[href^="#"]').forEach(a=>{a.addEventListener('click',e=>{e.preventDefault();const t=document.querySelector(a.getAttribute('href'));if(t)t.scrollIntoView({behavior:'smooth'})})});
+
+(function(){
+  const items=[...document.querySelectorAll('.gallery-item img')].map(i=>i.getAttribute('src'));
+  const lb=document.getElementById('lightbox');
+  const lbImg=document.getElementById('lightbox-img');
+  const counter=document.getElementById('lightbox-counter');
+  let idx=0;
+  function show(i){idx=(i+items.length)%items.length;lbImg.src=items[idx];counter.textContent=(idx+1)+' / '+items.length}
+  function open(i){show(i);lb.classList.add('active');document.body.style.overflow='hidden'}
+  function close(){lb.classList.remove('active');document.body.style.overflow=''}
+  document.querySelectorAll('.gallery-item').forEach((el,i)=>el.addEventListener('click',e=>{e.preventDefault();open(i)}));
+  lb.querySelector('.lightbox-close').addEventListener('click',close);
+  lb.querySelector('.lightbox-prev').addEventListener('click',e=>{e.stopPropagation();show(idx-1)});
+  lb.querySelector('.lightbox-next').addEventListener('click',e=>{e.stopPropagation();show(idx+1)});
+  lb.addEventListener('click',e=>{if(e.target===lb)close()});
+  document.addEventListener('keydown',e=>{if(!lb.classList.contains('active'))return;if(e.key==='Escape')close();else if(e.key==='ArrowLeft')show(idx-1);else if(e.key==='ArrowRight')show(idx+1)});
+})();
+</script>
+</body>
+</html>

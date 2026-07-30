@@ -1,0 +1,6 @@
+# Kaynak/orijinal görseller — siteye WebP sürümleri gidiyor, bunlar yerelde kalır
+originals/
+
+# OS
+.DS_Store
+Thumbs.db

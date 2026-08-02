@@ -63,8 +63,8 @@ async function api(url,options={}){
   const headers={'Content-Type':'application/json',...(options.headers||{})};
   if(csrfToken&&options.method&&options.method!=='GET')headers['x-csrf-token']=csrfToken;
   const response=await fetch(url,{...options,headers});
-  if(response.status===401){showLogin();throw new Error('Oturum süresi doldu.')}
   const body=response.status===204?null:await response.json();
+  if(response.status===401&&url!=='/api/admin/login'){showLogin();throw new Error('Oturum süresi doldu.')}
   if(!response.ok)throw new Error(body?.error?.message||'İşlem tamamlanamadı.');
   return body;
 }

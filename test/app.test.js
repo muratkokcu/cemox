@@ -92,6 +92,7 @@ test('public booking and admin approval flow', async t => {
 
   const wrongLogin = await jsonRequest(runtime.baseUrl, '/api/admin/login', { method: 'POST', body: JSON.stringify({ password: 'wrong-password' }) });
   assert.equal(wrongLogin.response.status, 401);
+  assert.equal(wrongLogin.body.error.message, 'Şifre hatalı.');
 
   const login = await jsonRequest(runtime.baseUrl, '/api/admin/login', { method: 'POST', body: JSON.stringify({ password: 'test-admin-password' }) });
   assert.equal(login.response.status, 200);

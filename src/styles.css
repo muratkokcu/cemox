@@ -3,7 +3,7 @@
 :root {
   color: #171916;
   background: #f5f5f2;
-  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-family: 'Manrope', ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   font-synthesis: none;
   --ink: #171916;
   --muted: #6f726c;
@@ -34,7 +34,7 @@ a { color: inherit; text-decoration: none; }
 .spin { animation: spin .8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
-.brand { display: inline-flex; align-items: baseline; font-size: 19px; font-weight: 850; letter-spacing: -.04em; }
+.brand { display: inline-flex; align-items: baseline; font-family: 'Outfit', ui-sans-serif, system-ui, sans-serif; font-size: 19px; font-weight: 850; letter-spacing: -.04em; }
 .brand span { color: var(--gold); }
 .brand small { margin-left: 9px; color: var(--muted); font-size: 10px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
 .eyebrow { display: block; color: var(--green-2); font-size: 11px; font-weight: 800; letter-spacing: .14em; text-transform: uppercase; }
@@ -191,6 +191,8 @@ a { color: inherit; text-decoration: none; }
 .success-state button { border: 0; color: var(--green); background: none; font-size: 12px; font-weight: 750; cursor: pointer; }
 
 /* Admin */
+.admin-page, .admin-login, .admin-loading { font-family: 'Manrope', ui-sans-serif, system-ui, sans-serif; }
+.admin-title h1, .admin-title h2, .admin-service-panel h2, .appointment-section h2, .admin-login h1 { font-family: 'Outfit', ui-sans-serif, system-ui, sans-serif; }
 .admin-loading { min-height: 100vh; display: grid; place-content: center; grid-auto-flow: column; gap: 9px; color: var(--muted); font-size: 13px; }
 .admin-login { min-height: 100vh; display: grid; place-items: center; padding: 24px; background: radial-gradient(circle at 50% 0,#e9eee9,transparent 42%), var(--canvas); }
 .admin-login form { width: min(430px,100%); padding: 38px; background: white; border: 1px solid var(--line); border-radius: 15px; box-shadow: 0 24px 60px rgba(25,38,29,.09); }

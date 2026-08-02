@@ -26,12 +26,15 @@ async function createTestServer() {
   });
   const database = createDatabase(':memory:');
   const localNow = new Date(Date.now() + 180 * 60000);
-  const dateFrom = localNow.toISOString().slice(0, 10);
-  const dateTo = new Date(localNow.getTime() + 30 * 86400000).toISOString().slice(0, 10);
-  for (const serviceId of ['medical-fitness', 'kisisel-antrenman']) {
-    database.createAvailabilityRule({
-      serviceId, dateFrom, dateTo, weekdays: [1, 2, 3, 4, 5], startMinute: 600, endMinute: 1080
-    });
+  for (let offset = 2; offset <= 10; offset++) {
+    const localDay = new Date(Date.UTC(localNow.getUTCFullYear(), localNow.getUTCMonth(), localNow.getUTCDate() + offset));
+    if ([0, 6].includes(localDay.getUTCDay())) continue;
+    for (const serviceId of ['medical-fitness', 'kisisel-antrenman']) {
+      for (const minute of [600, 630, 660]) {
+        const startAt = Date.UTC(localDay.getUTCFullYear(), localDay.getUTCMonth(), localDay.getUTCDate(), Math.floor(minute / 60), minute % 60) - 180 * 60000;
+        database.setAvailabilitySlot({ serviceId, startAt, endAt: startAt + 20 * 60000, open: true });
+      }
+    }
   }
   const { app } = createApp({ config, database, emailService: createEmailStub(), logger: { info() {}, error() {} } });
   const server = app.listen(0, '127.0.0.1');
@@ -145,7 +148,7 @@ test('admin can add and remove an availability block', async t => {
   assert.equal(removed.response.status, 204);
 });
 
-test('admin publishes service-specific availability rules', async t => {
+test('admin toggles service-specific calendar slots', async t => {
   const runtime = await createTestServer();
   t.after(runtime.close);
   const before = await jsonRequest(runtime.baseUrl, '/api/availability?service=fonksiyonel-antrenman');
@@ -154,22 +157,26 @@ test('admin publishes service-specific availability rules', async t => {
   const login = await jsonRequest(runtime.baseUrl, '/api/admin/login', { method: 'POST', body: JSON.stringify({ password: 'test-admin-password' }) });
   const headers = { Cookie: login.response.headers.get('set-cookie').split(';')[0], 'x-csrf-token': login.body.csrfToken };
   const localNow = new Date(Date.now() + 180 * 60000);
-  const dateFrom = localNow.toISOString().slice(0, 10);
-  const dateTo = new Date(localNow.getTime() + 30 * 86400000).toISOString().slice(0, 10);
-  const created = await jsonRequest(runtime.baseUrl, '/api/admin/availability-rules', {
-    method: 'POST', headers, body: JSON.stringify({
-      serviceId: 'fonksiyonel-antrenman', dateFrom, dateTo,
-      weekdays: [1, 3, 5], startTime: '10:00', endTime: '14:00'
+  const localDay = new Date(Date.UTC(localNow.getUTCFullYear(), localNow.getUTCMonth(), localNow.getUTCDate() + 3));
+  const startAt = Date.UTC(localDay.getUTCFullYear(), localDay.getUTCMonth(), localDay.getUTCDate(), 10) - 180 * 60000;
+  const created = await jsonRequest(runtime.baseUrl, '/api/admin/availability-slots', {
+    method: 'PUT', headers, body: JSON.stringify({
+      serviceId: 'fonksiyonel-antrenman', start: new Date(startAt).toISOString(), open: true
     })
   });
-  assert.equal(created.response.status, 201);
+  assert.equal(created.response.status, 200);
+  assert.equal(created.body.open, true);
 
   const after = await jsonRequest(runtime.baseUrl, '/api/availability?service=fonksiyonel-antrenman');
   assert.ok(after.body.days.length > 0);
-  assert.ok(after.body.days.every(day => [1, 3, 5].includes(new Date(day.date + 'T00:00:00Z').getUTCDay())));
 
-  const removed = await jsonRequest(runtime.baseUrl, `/api/admin/availability-rules/${created.body.rule.id}`, { method: 'DELETE', headers });
-  assert.equal(removed.response.status, 204);
+  const removed = await jsonRequest(runtime.baseUrl, '/api/admin/availability-slots', {
+    method: 'PUT', headers, body: JSON.stringify({
+      serviceId: 'fonksiyonel-antrenman', start: new Date(startAt).toISOString(), open: false
+    })
+  });
+  assert.equal(removed.response.status, 200);
+  assert.equal(removed.body.open, false);
   const emptyAgain = await jsonRequest(runtime.baseUrl, '/api/availability?service=fonksiyonel-antrenman');
   assert.equal(emptyAgain.body.days.length, 0);
 });

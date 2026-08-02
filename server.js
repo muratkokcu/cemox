@@ -120,36 +120,29 @@ export function createApp({ config = loadConfig(), database = null, emailService
     } catch (error) { next(error); }
   });
 
-  app.get('/api/admin/availability-rules', requireAdmin(db), (req, res) => {
-    res.json({ rules: db.listAvailabilityRules() });
-  });
-
-  app.post('/api/admin/availability-rules', requireAdmin(db), requireCsrf, (req, res, next) => {
+  app.get('/api/admin/availability-slots', requireAdmin(db), (req, res, next) => {
     try {
-      const serviceId = String(req.body?.serviceId || '');
+      const serviceId = String(req.query.service || '');
       assertService(serviceId);
-      const dateFrom = parseDateKey(req.body?.dateFrom, 'Başlangıç tarihi');
-      const dateTo = parseDateKey(req.body?.dateTo, 'Bitiş tarihi');
-      if (dateTo < dateFrom) throw validationError('Bitiş tarihi başlangıç tarihinden önce olamaz.');
-      const rangeDays = (Date.parse(dateTo + 'T00:00:00Z') - Date.parse(dateFrom + 'T00:00:00Z')) / 86400000;
-      if (rangeDays > 366) throw validationError('Tek bir müsaitlik kuralı bir yıldan uzun olamaz.');
-      const weekdays = Array.isArray(req.body?.weekdays) ? [...new Set(req.body.weekdays.map(Number))].sort() : [];
-      if (!weekdays.length || weekdays.some(day => !Number.isInteger(day) || day < 1 || day > 5)) throw validationError('En az bir hafta içi gün seçin.');
-      const startMinute = parseTimeToMinute(req.body?.startTime, 'Başlangıç saati');
-      const endMinute = parseTimeToMinute(req.body?.endTime, 'Bitiş saati');
-      if (endMinute - startMinute < BOOKING_RULES.slotMinutes + BOOKING_RULES.bufferMinutes) throw validationError('Saat aralığı en az 30 dakika olmalıdır.');
-      res.status(201).json({ rule: db.createAvailabilityRule({ serviceId, dateFrom, dateTo, weekdays, startMinute, endMinute }) });
+      const from = parseTimestamp(req.query.from, 'Başlangıç');
+      const to = parseTimestamp(req.query.to, 'Bitiş');
+      if (to <= from || to - from > 32 * 86400000) throw validationError('Takvim aralığı geçerli değil.');
+      res.json({ slots: db.listAvailabilitySlots({ serviceId, from, to }) });
     } catch (error) { next(error); }
   });
 
-  app.delete('/api/admin/availability-rules/:id', requireAdmin(db), requireCsrf, (req, res, next) => {
+  app.put('/api/admin/availability-slots', requireAdmin(db), requireCsrf, (req, res, next) => {
     try {
-      if (!db.deleteAvailabilityRule(req.params.id)) {
-        const error = new Error('Müsaitlik kuralı bulunamadı.');
-        error.statusCode = 404;
-        throw error;
-      }
-      res.status(204).end();
+      const serviceId = String(req.body?.serviceId || '');
+      assertService(serviceId);
+      const startAt = parseTimestamp(req.body?.start, 'Slot zamanı');
+      assertSlotGrid(startAt);
+      if (startAt < Date.now()) throw validationError('Geçmiş bir saat değiştirilemez.');
+      const open = req.body?.open === true;
+      const slot = db.setAvailabilitySlot({
+        serviceId, startAt, endAt: startAt + BOOKING_RULES.slotMinutes * 60000, open
+      });
+      res.json({ open: Boolean(slot), slot });
     } catch (error) { next(error); }
   });
 
@@ -185,25 +178,22 @@ export function buildAvailability(db, serviceId, now = Date.now()) {
   const busy = db.getBusyRanges(now, horizon + 86400000, now);
   const rangeStart = new Date(Date.UTC(year, month, day)).toISOString().slice(0, 10);
   const rangeEnd = new Date(Date.UTC(year, month, day + BOOKING_RULES.horizonDays)).toISOString().slice(0, 10);
-  const rules = db.listAvailabilityRules({ serviceId, from: rangeStart, to: rangeEnd });
+  const publishedSlots = db.listAvailabilitySlots({ serviceId, from: now, to: horizon + 86400000 });
   const days = [];
 
   for (let offset = 0; offset <= BOOKING_RULES.horizonDays; offset++) {
     const localDay = new Date(Date.UTC(year, month, day + offset));
-    const weekday = localDay.getUTCDay();
     const dateKey = localDay.toISOString().slice(0, 10);
-    const matchingRules = rules.filter(rule => rule.date_from <= dateKey && rule.date_to >= dateKey && rule.weekdays.split(',').map(Number).includes(weekday));
-    if (!matchingRules.length) continue;
-    const slotMap = new Map();
-    for (const rule of matchingRules) for (let minutes = rule.start_minute; minutes + BOOKING_RULES.slotMinutes + BOOKING_RULES.bufferMinutes <= rule.end_minute; minutes += BOOKING_RULES.slotStepMinutes) {
-      const start = Date.UTC(localDay.getUTCFullYear(), localDay.getUTCMonth(), localDay.getUTCDate(), Math.floor(minutes / 60), minutes % 60) - BOOKING_RULES.utcOffsetMinutes * 60000;
-      const end = start + BOOKING_RULES.slotMinutes * 60000;
+    const dayStart = Date.UTC(localDay.getUTCFullYear(), localDay.getUTCMonth(), localDay.getUTCDate()) - BOOKING_RULES.utcOffsetMinutes * 60000;
+    const dayEnd = dayStart + 86400000;
+    const slots = publishedSlots.filter(slot => slot.start_at >= dayStart && slot.start_at < dayEnd).map(slot => {
+      const start = slot.start_at;
+      const end = slot.end_at;
       const protectedEnd = end + BOOKING_RULES.bufferMinutes * 60000;
-      if (start < minStart || start > horizon) continue;
+      if (start < minStart || start > horizon) return null;
       const overlaps = busy.some(range => range.start < protectedEnd && (range.kind === 'appointment' ? range.end + BOOKING_RULES.bufferMinutes * 60000 : range.end) > start);
-      if (!overlaps) slotMap.set(start, { start: new Date(start).toISOString(), label: formatTime(start) });
-    }
-    const slots = [...slotMap.values()].sort((a, b) => a.start.localeCompare(b.start));
+      return overlaps ? null : { start: new Date(start).toISOString(), label: formatTime(start) };
+    }).filter(Boolean).sort((a, b) => a.start.localeCompare(b.start));
     if (slots.length) days.push({ date: localDay.toISOString().slice(0, 10), label: formatDay(localDay), slots });
   }
   return { timezone: BOOKING_RULES.timezone, generatedAt: new Date(now).toISOString(), rangeStart, rangeEnd, days };
@@ -234,6 +224,12 @@ function assertSlot(timestamp, now = Date.now()) {
   const local = new Date(timestamp + BOOKING_RULES.utcOffsetMinutes * 60000);
   const minute = local.getUTCMinutes();
   if (minute % BOOKING_RULES.slotStepMinutes !== 0) throw validationError('Seçilen saat geçerli bir zaman dilimi değil.');
+}
+
+function assertSlotGrid(timestamp) {
+  if (timestamp % 60000 !== 0) throw validationError('Slot zamanı geçerli değil.');
+  const local = new Date(timestamp + BOOKING_RULES.utcOffsetMinutes * 60000);
+  if (local.getUTCMinutes() % BOOKING_RULES.slotStepMinutes !== 0) throw validationError('Slot 30 dakikalık takvime uygun değil.');
 }
 
 function assertSlotOffered(db, serviceId, timestamp) {
@@ -323,21 +319,6 @@ function parseTimestamp(value, label) {
   const date = new Date(String(value || ''));
   if (Number.isNaN(date.getTime())) throw validationError(`${label} geçerli değil.`);
   return date.getTime();
-}
-
-function parseDateKey(value, label) {
-  const text = String(value || '');
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(text) || Number.isNaN(Date.parse(text + 'T00:00:00Z'))) throw validationError(`${label} geçerli değil.`);
-  return text;
-}
-
-function parseTimeToMinute(value, label) {
-  const match = /^(\d{2}):(\d{2})$/.exec(String(value || ''));
-  if (!match) throw validationError(`${label} geçerli değil.`);
-  const hour = Number(match[1]);
-  const minute = Number(match[2]);
-  if (hour > 23 || minute > 59 || minute % BOOKING_RULES.slotStepMinutes !== 0) throw validationError(`${label} 30 dakikalık aralıklara uygun olmalıdır.`);
-  return hour * 60 + minute;
 }
 
 function normalizeText(value, min, max, label) {

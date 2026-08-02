@@ -5,7 +5,7 @@ Harici randevu servisi kullanmadan çalışan Node.js, SQLite ve özel yönetim 
 ## Özellikler
 
 - Altı hizmet için 20 dakikalık telefon ön görüşmesi
-- Hizmet bazında tarih aralığı, hafta günleri ve çalışma saatleri yayınlama
+- Haftalık admin takviminde branş bazında 30 dakikalık saatleri açık/kapalı yapma
 - Aylık takvimde yalnızca yayınlanmış ve boş gün/saatleri gösterme
 - Seçilen saati 24 saat tutan yönetici onay akışı ve eşzamanlı çakışma koruması
 - Şifreli yönetim panelinden onay, ret ve iptal
@@ -55,4 +55,4 @@ SQLite verisi `cemox-data` volume’unda saklanır. Üretimde uygulamanın önü
 
 ## Randevu kuralları
 
-Kurallar [src/config.js](src/config.js) içindeki `BOOKING_RULES` üzerinden yönetilir. Hizmet adları aynı dosyadaki `SERVICES` yapılandırmasındadır.
+Randevu süresi, tampon süre, minimum bildirim ve rezervasyon ufku [src/config.js](src/config.js) içindeki `BOOKING_RULES` üzerinden yönetilir. Hizmet adları aynı dosyadaki `SERVICES` yapılandırmasındadır; branşların açık saatleri admin takviminden belirlenir.

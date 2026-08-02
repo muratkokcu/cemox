@@ -40,17 +40,15 @@ export function createDatabase(databasePath) {
     );
     CREATE INDEX IF NOT EXISTS idx_blocks_time ON availability_blocks(start_at, end_at);
 
-    CREATE TABLE IF NOT EXISTS availability_rules (
+    CREATE TABLE IF NOT EXISTS availability_slots (
       id TEXT PRIMARY KEY,
       service_id TEXT NOT NULL,
-      date_from TEXT NOT NULL,
-      date_to TEXT NOT NULL,
-      weekdays TEXT NOT NULL,
-      start_minute INTEGER NOT NULL,
-      end_minute INTEGER NOT NULL,
-      created_at INTEGER NOT NULL
+      start_at INTEGER NOT NULL,
+      end_at INTEGER NOT NULL,
+      created_at INTEGER NOT NULL,
+      UNIQUE(service_id, start_at)
     );
-    CREATE INDEX IF NOT EXISTS idx_rules_service_dates ON availability_rules(service_id, date_from, date_to);
+    CREATE INDEX IF NOT EXISTS idx_slots_service_time ON availability_slots(service_id, start_at, end_at);
 
     CREATE TABLE IF NOT EXISTS admin_sessions (
       token_hash TEXT PRIMARY KEY,
@@ -185,26 +183,22 @@ export function createDatabase(databasePath) {
     return sqlite.prepare('DELETE FROM availability_blocks WHERE id = ?').run(id).changes > 0;
   }
 
-  function listAvailabilityRules({ serviceId = '', from = '', to = '' } = {}) {
-    if (serviceId && from && to) {
-      return sqlite.prepare('SELECT * FROM availability_rules WHERE service_id = ? AND date_from <= ? AND date_to >= ? ORDER BY date_from, start_minute')
-        .all(serviceId, to, from);
+  function listAvailabilitySlots({ serviceId, from, to }) {
+    return sqlite.prepare('SELECT * FROM availability_slots WHERE service_id = ? AND start_at >= ? AND start_at < ? ORDER BY start_at')
+      .all(serviceId, from, to);
+  }
+
+  function setAvailabilitySlot({ serviceId, startAt, endAt, open }, now = Date.now()) {
+    if (open) {
+      sqlite.prepare(`
+        INSERT INTO availability_slots (id, service_id, start_at, end_at, created_at)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(service_id, start_at) DO UPDATE SET end_at = excluded.end_at
+      `).run(randomUUID(), serviceId, startAt, endAt, now);
+    } else {
+      sqlite.prepare('DELETE FROM availability_slots WHERE service_id = ? AND start_at = ?').run(serviceId, startAt);
     }
-    if (serviceId) return sqlite.prepare('SELECT * FROM availability_rules WHERE service_id = ? ORDER BY date_from, start_minute').all(serviceId);
-    return sqlite.prepare('SELECT * FROM availability_rules ORDER BY date_from, service_id, start_minute').all();
-  }
-
-  function createAvailabilityRule({ serviceId, dateFrom, dateTo, weekdays, startMinute, endMinute }, now = Date.now()) {
-    const id = randomUUID();
-    sqlite.prepare(`
-      INSERT INTO availability_rules (id, service_id, date_from, date_to, weekdays, start_minute, end_minute, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(id, serviceId, dateFrom, dateTo, weekdays.join(','), startMinute, endMinute, now);
-    return sqlite.prepare('SELECT * FROM availability_rules WHERE id = ?').get(id);
-  }
-
-  function deleteAvailabilityRule(id) {
-    return sqlite.prepare('DELETE FROM availability_rules WHERE id = ?').run(id).changes > 0;
+    return sqlite.prepare('SELECT * FROM availability_slots WHERE service_id = ? AND start_at = ?').get(serviceId, startAt) || null;
   }
 
   function createSession(ttlMs = 12 * 60 * 60 * 1000, now = Date.now()) {
@@ -230,7 +224,7 @@ export function createDatabase(databasePath) {
   return {
     sqlite, expirePending, getBusyRanges, isRangeFree, createAppointment, getAppointment,
     listAppointments, decideAppointment, listBlocks, createBlock, deleteBlock,
-    listAvailabilityRules, createAvailabilityRule, deleteAvailabilityRule,
+    listAvailabilitySlots, setAvailabilitySlot,
     createSession, getSession, deleteSession, close: () => sqlite.close()
   };
 }

@@ -26,13 +26,13 @@ export function createEmailService(config, logger = console) {
       await Promise.allSettled([
         send({
           to: appointment.email,
-          subject: 'Randevu talebiniz alındı',
-          html: `<p>Merhaba ${escapeHtml(appointment.name)},</p><p><strong>${escapeHtml(appointment.service_name)}</strong> için <strong>${when}</strong> tarihli telefon ön görüşmesi talebiniz alındı.</p><p>Seçtiğiniz saat 24 saat boyunca sizin için tutulacak. Talebiniz sonuçlandığında e-posta ile bilgilendirileceksiniz.</p><p>Talep numarası: ${escapeHtml(appointment.id)}</p>`
+          subject: 'Randevu seçiminiz alındı',
+          html: `<p>Merhaba ${escapeHtml(appointment.name)},</p><p><strong>${escapeHtml(appointment.service_name)}</strong> için <strong>${when}</strong> tarihini seçtiniz.</p><p>Bu saat 24 saat boyunca sizin için tutulacak ve antrenör onayından sonra kesinleşecektir.</p><p>Randevu numarası: ${escapeHtml(appointment.id)}</p>`
         }),
         send({
           to: config.adminEmail,
-          subject: `Yeni randevu talebi — ${appointment.service_name}`,
-          html: `<p><strong>${escapeHtml(appointment.name)}</strong>, ${when} için talep oluşturdu.</p><p>Telefon: ${escapeHtml(appointment.phone)}<br>E-posta: ${escapeHtml(appointment.email)}<br>Not: ${escapeHtml(appointment.note || '—')}</p><p><a href="${config.appOrigin}/admin">Yönetim panelini açın</a></p>`
+          subject: `Onay bekleyen randevu — ${appointment.service_name}`,
+          html: `<p><strong>${escapeHtml(appointment.name)}</strong>, ${when} saatini seçti.</p><p>Telefon: ${escapeHtml(appointment.phone)}<br>E-posta: ${escapeHtml(appointment.email)}<br>Not: ${escapeHtml(appointment.note || '—')}</p><p><a href="${config.appOrigin}/admin">Randevuyu onaylayın veya reddedin</a></p>`
         })
       ]);
     },

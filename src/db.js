@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
+import { BOOKING_RULES } from './config.js';
 
 const ACTIVE_STATUSES = "(status = 'PENDING' AND hold_expires_at > ?) OR status = 'APPROVED'";
 
@@ -39,6 +40,18 @@ export function createDatabase(databasePath) {
     );
     CREATE INDEX IF NOT EXISTS idx_blocks_time ON availability_blocks(start_at, end_at);
 
+    CREATE TABLE IF NOT EXISTS availability_rules (
+      id TEXT PRIMARY KEY,
+      service_id TEXT NOT NULL,
+      date_from TEXT NOT NULL,
+      date_to TEXT NOT NULL,
+      weekdays TEXT NOT NULL,
+      start_minute INTEGER NOT NULL,
+      end_minute INTEGER NOT NULL,
+      created_at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_rules_service_dates ON availability_rules(service_id, date_from, date_to);
+
     CREATE TABLE IF NOT EXISTS admin_sessions (
       token_hash TEXT PRIMARY KEY,
       csrf_token TEXT NOT NULL,
@@ -75,8 +88,8 @@ export function createDatabase(databasePath) {
     expirePending(now);
     const appointment = sqlite.prepare(`
       SELECT id FROM appointments
-      WHERE (${ACTIVE_STATUSES}) AND id != ? AND start_at < ? AND (end_at + 600000) > ? LIMIT 1
-    `).get(now, excludeAppointmentId, end, start);
+      WHERE (${ACTIVE_STATUSES}) AND id != ? AND start_at < ? AND (end_at + ?) > ? LIMIT 1
+    `).get(now, excludeAppointmentId, end, BOOKING_RULES.bufferMinutes * 60000, start);
     if (appointment) return false;
     return !sqlite.prepare('SELECT id FROM availability_blocks WHERE start_at < ? AND end_at > ? LIMIT 1').get(end, start);
   }
@@ -89,13 +102,13 @@ export function createDatabase(databasePath) {
         SELECT id FROM appointments
         WHERE status = 'PENDING' AND hold_expires_at > ? AND (lower(email) = lower(?) OR phone = ?) LIMIT 1
       `).get(now, input.email, input.phone);
-      if (existing) throw conflictError('Bu e-posta veya telefon numarasıyla zaten bekleyen bir talep var.');
-      if (!isRangeFree(input.startAt, input.endAt + 10 * 60 * 1000, now)) {
+      if (existing) throw conflictError('Bu e-posta veya telefon numarasıyla zaten bekleyen bir randevu seçimi var.');
+      if (!isRangeFree(input.startAt, input.endAt + BOOKING_RULES.bufferMinutes * 60000, now)) {
         throw conflictError('Bu saat artık müsait değil. Lütfen başka bir saat seçin.');
       }
 
       const id = randomUUID();
-      const holdExpiresAt = now + 24 * 60 * 60 * 1000;
+      const holdExpiresAt = now + BOOKING_RULES.holdHours * 60 * 60 * 1000;
       sqlite.prepare(`
         INSERT INTO appointments
           (id, service_id, service_name, start_at, end_at, name, email, phone, note, status, hold_expires_at, created_at)
@@ -130,7 +143,7 @@ export function createDatabase(databasePath) {
 
       if (action === 'approve') {
         if (!['PENDING', 'CONFLICT'].includes(appointment.status)) throw conflictError('Yalnızca bekleyen veya çakışan talepler onaylanabilir.');
-        if (!isRangeFree(appointment.start_at, appointment.end_at + 10 * 60 * 1000, now, id)) {
+        if (!isRangeFree(appointment.start_at, appointment.end_at + BOOKING_RULES.bufferMinutes * 60000, now, id)) {
           sqlite.prepare("UPDATE appointments SET status = 'CONFLICT', decision_at = ?, admin_note = ? WHERE id = ?")
             .run(now, adminNote || 'Onay sırasında saat çakışması oluştu.', id);
           sqlite.exec('COMMIT');
@@ -172,6 +185,28 @@ export function createDatabase(databasePath) {
     return sqlite.prepare('DELETE FROM availability_blocks WHERE id = ?').run(id).changes > 0;
   }
 
+  function listAvailabilityRules({ serviceId = '', from = '', to = '' } = {}) {
+    if (serviceId && from && to) {
+      return sqlite.prepare('SELECT * FROM availability_rules WHERE service_id = ? AND date_from <= ? AND date_to >= ? ORDER BY date_from, start_minute')
+        .all(serviceId, to, from);
+    }
+    if (serviceId) return sqlite.prepare('SELECT * FROM availability_rules WHERE service_id = ? ORDER BY date_from, start_minute').all(serviceId);
+    return sqlite.prepare('SELECT * FROM availability_rules ORDER BY date_from, service_id, start_minute').all();
+  }
+
+  function createAvailabilityRule({ serviceId, dateFrom, dateTo, weekdays, startMinute, endMinute }, now = Date.now()) {
+    const id = randomUUID();
+    sqlite.prepare(`
+      INSERT INTO availability_rules (id, service_id, date_from, date_to, weekdays, start_minute, end_minute, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(id, serviceId, dateFrom, dateTo, weekdays.join(','), startMinute, endMinute, now);
+    return sqlite.prepare('SELECT * FROM availability_rules WHERE id = ?').get(id);
+  }
+
+  function deleteAvailabilityRule(id) {
+    return sqlite.prepare('DELETE FROM availability_rules WHERE id = ?').run(id).changes > 0;
+  }
+
   function createSession(ttlMs = 12 * 60 * 60 * 1000, now = Date.now()) {
     const token = randomBytes(32).toString('base64url');
     const tokenHash = hashToken(token);
@@ -195,6 +230,7 @@ export function createDatabase(databasePath) {
   return {
     sqlite, expirePending, getBusyRanges, isRangeFree, createAppointment, getAppointment,
     listAppointments, decideAppointment, listBlocks, createBlock, deleteBlock,
+    listAvailabilityRules, createAvailabilityRule, deleteAvailabilityRule,
     createSession, getSession, deleteSession, close: () => sqlite.close()
   };
 }

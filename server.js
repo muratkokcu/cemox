@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { scryptSync, timingSafeEqual } from 'node:crypto';
 import express from 'express';
 import { loadConfig, SERVICES, BOOKING_RULES } from './src/config.js';
-import { createDatabase, validationError } from './src/db.js';
+import { createDatabase, validationError, conflictError } from './src/db.js';
 import { createEmailService } from './src/email.js';
 
 const rootDir = path.dirname(fileURLToPath(import.meta.url));
@@ -32,13 +32,14 @@ export function createApp({ config = loadConfig(), database = null, emailService
     try {
       const serviceId = String(req.query.service || '');
       assertService(serviceId);
-      res.json(buildAvailability(db));
+      res.json(buildAvailability(db, serviceId));
     } catch (error) { next(error); }
   });
 
   app.post('/api/appointments', bookingLimiter, requireSameOrigin(config), async (req, res, next) => {
     try {
       const payload = validateBookingPayload(req.body);
+      assertSlotOffered(db, payload.serviceId, payload.startAt);
       const appointment = db.createAppointment(payload);
       res.status(201).json({
         appointment: { id: appointment.id, status: appointment.status, holdExpiresAt: appointment.hold_expires_at }
@@ -119,6 +120,39 @@ export function createApp({ config = loadConfig(), database = null, emailService
     } catch (error) { next(error); }
   });
 
+  app.get('/api/admin/availability-rules', requireAdmin(db), (req, res) => {
+    res.json({ rules: db.listAvailabilityRules() });
+  });
+
+  app.post('/api/admin/availability-rules', requireAdmin(db), requireCsrf, (req, res, next) => {
+    try {
+      const serviceId = String(req.body?.serviceId || '');
+      assertService(serviceId);
+      const dateFrom = parseDateKey(req.body?.dateFrom, 'Başlangıç tarihi');
+      const dateTo = parseDateKey(req.body?.dateTo, 'Bitiş tarihi');
+      if (dateTo < dateFrom) throw validationError('Bitiş tarihi başlangıç tarihinden önce olamaz.');
+      const rangeDays = (Date.parse(dateTo + 'T00:00:00Z') - Date.parse(dateFrom + 'T00:00:00Z')) / 86400000;
+      if (rangeDays > 366) throw validationError('Tek bir müsaitlik kuralı bir yıldan uzun olamaz.');
+      const weekdays = Array.isArray(req.body?.weekdays) ? [...new Set(req.body.weekdays.map(Number))].sort() : [];
+      if (!weekdays.length || weekdays.some(day => !Number.isInteger(day) || day < 1 || day > 5)) throw validationError('En az bir hafta içi gün seçin.');
+      const startMinute = parseTimeToMinute(req.body?.startTime, 'Başlangıç saati');
+      const endMinute = parseTimeToMinute(req.body?.endTime, 'Bitiş saati');
+      if (endMinute - startMinute < BOOKING_RULES.slotMinutes + BOOKING_RULES.bufferMinutes) throw validationError('Saat aralığı en az 30 dakika olmalıdır.');
+      res.status(201).json({ rule: db.createAvailabilityRule({ serviceId, dateFrom, dateTo, weekdays, startMinute, endMinute }) });
+    } catch (error) { next(error); }
+  });
+
+  app.delete('/api/admin/availability-rules/:id', requireAdmin(db), requireCsrf, (req, res, next) => {
+    try {
+      if (!db.deleteAvailabilityRule(req.params.id)) {
+        const error = new Error('Müsaitlik kuralı bulunamadı.');
+        error.statusCode = 404;
+        throw error;
+      }
+      res.status(204).end();
+    } catch (error) { next(error); }
+  });
+
   app.use('/assets', express.static(path.join(rootDir, 'assets'), { maxAge: config.production ? '30d' : 0, immutable: config.production }));
   app.use('/galery', express.static(path.join(rootDir, 'galery'), { maxAge: config.production ? '30d' : 0, immutable: config.production }));
   app.use('/public', express.static(path.join(rootDir, 'public'), { maxAge: config.production ? '1d' : 0 }));
@@ -141,7 +175,7 @@ export function createApp({ config = loadConfig(), database = null, emailService
   return { app, db, email, runMaintenance };
 }
 
-export function buildAvailability(db, now = Date.now()) {
+export function buildAvailability(db, serviceId, now = Date.now()) {
   const minStart = now + BOOKING_RULES.minimumNoticeHours * 3600000;
   const horizon = now + BOOKING_RULES.horizonDays * 86400000;
   const localNow = new Date(now + BOOKING_RULES.utcOffsetMinutes * 60000);
@@ -149,29 +183,35 @@ export function buildAvailability(db, now = Date.now()) {
   const month = localNow.getUTCMonth();
   const day = localNow.getUTCDate();
   const busy = db.getBusyRanges(now, horizon + 86400000, now);
+  const rangeStart = new Date(Date.UTC(year, month, day)).toISOString().slice(0, 10);
+  const rangeEnd = new Date(Date.UTC(year, month, day + BOOKING_RULES.horizonDays)).toISOString().slice(0, 10);
+  const rules = db.listAvailabilityRules({ serviceId, from: rangeStart, to: rangeEnd });
   const days = [];
 
   for (let offset = 0; offset <= BOOKING_RULES.horizonDays; offset++) {
     const localDay = new Date(Date.UTC(year, month, day + offset));
     const weekday = localDay.getUTCDay();
-    if (weekday === 0 || weekday === 6) continue;
-    const slots = [];
-    for (let minutes = BOOKING_RULES.workStartHour * 60; minutes < BOOKING_RULES.workEndHour * 60; minutes += BOOKING_RULES.slotStepMinutes) {
+    const dateKey = localDay.toISOString().slice(0, 10);
+    const matchingRules = rules.filter(rule => rule.date_from <= dateKey && rule.date_to >= dateKey && rule.weekdays.split(',').map(Number).includes(weekday));
+    if (!matchingRules.length) continue;
+    const slotMap = new Map();
+    for (const rule of matchingRules) for (let minutes = rule.start_minute; minutes + BOOKING_RULES.slotMinutes + BOOKING_RULES.bufferMinutes <= rule.end_minute; minutes += BOOKING_RULES.slotStepMinutes) {
       const start = Date.UTC(localDay.getUTCFullYear(), localDay.getUTCMonth(), localDay.getUTCDate(), Math.floor(minutes / 60), minutes % 60) - BOOKING_RULES.utcOffsetMinutes * 60000;
       const end = start + BOOKING_RULES.slotMinutes * 60000;
       const protectedEnd = end + BOOKING_RULES.bufferMinutes * 60000;
       if (start < minStart || start > horizon) continue;
       const overlaps = busy.some(range => range.start < protectedEnd && (range.kind === 'appointment' ? range.end + BOOKING_RULES.bufferMinutes * 60000 : range.end) > start);
-      if (!overlaps) slots.push({ start: new Date(start).toISOString(), label: formatTime(start) });
+      if (!overlaps) slotMap.set(start, { start: new Date(start).toISOString(), label: formatTime(start) });
     }
+    const slots = [...slotMap.values()].sort((a, b) => a.start.localeCompare(b.start));
     if (slots.length) days.push({ date: localDay.toISOString().slice(0, 10), label: formatDay(localDay), slots });
   }
-  return { timezone: BOOKING_RULES.timezone, generatedAt: new Date(now).toISOString(), days };
+  return { timezone: BOOKING_RULES.timezone, generatedAt: new Date(now).toISOString(), rangeStart, rangeEnd, days };
 }
 
 function validateBookingPayload(body) {
   if (!body || typeof body !== 'object') throw validationError('Geçersiz form verisi.');
-  if (String(body.website || '').trim()) throw validationError('Talep doğrulanamadı.');
+  if (String(body.website || '').trim()) throw validationError('Rezervasyon doğrulanamadı.');
   const startedAt = Number(body.startedAt || 0);
   if (!startedAt || Date.now() - startedAt < 3000) throw validationError('Form çok hızlı gönderildi. Lütfen tekrar deneyin.');
   const serviceId = String(body.serviceId || '');
@@ -192,12 +232,14 @@ function assertSlot(timestamp, now = Date.now()) {
   if (timestamp % 60000 !== 0) throw validationError('Geçerli bir randevu saati seçin.');
   if (timestamp < now + BOOKING_RULES.minimumNoticeHours * 3600000 || timestamp > now + BOOKING_RULES.horizonDays * 86400000) throw validationError('Seçilen saat rezervasyon aralığının dışında.');
   const local = new Date(timestamp + BOOKING_RULES.utcOffsetMinutes * 60000);
-  const weekday = local.getUTCDay();
-  const hour = local.getUTCHours();
   const minute = local.getUTCMinutes();
-  if (weekday === 0 || weekday === 6 || hour < BOOKING_RULES.workStartHour || hour >= BOOKING_RULES.workEndHour || minute % BOOKING_RULES.slotStepMinutes !== 0) {
-    throw validationError('Seçilen saat çalışma saatlerinin dışında.');
-  }
+  if (minute % BOOKING_RULES.slotStepMinutes !== 0) throw validationError('Seçilen saat geçerli bir zaman dilimi değil.');
+}
+
+function assertSlotOffered(db, serviceId, timestamp) {
+  const availability = buildAvailability(db, serviceId);
+  const offered = availability.days.some(day => day.slots.some(slot => Date.parse(slot.start) === timestamp));
+  if (!offered) throw conflictError('Seçilen saat artık sunulmuyor. Lütfen takvimi yenileyin.');
 }
 
 function requireAdmin(db) {
@@ -281,6 +323,21 @@ function parseTimestamp(value, label) {
   const date = new Date(String(value || ''));
   if (Number.isNaN(date.getTime())) throw validationError(`${label} geçerli değil.`);
   return date.getTime();
+}
+
+function parseDateKey(value, label) {
+  const text = String(value || '');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(text) || Number.isNaN(Date.parse(text + 'T00:00:00Z'))) throw validationError(`${label} geçerli değil.`);
+  return text;
+}
+
+function parseTimeToMinute(value, label) {
+  const match = /^(\d{2}):(\d{2})$/.exec(String(value || ''));
+  if (!match) throw validationError(`${label} geçerli değil.`);
+  const hour = Number(match[1]);
+  const minute = Number(match[2]);
+  if (hour > 23 || minute > 59 || minute % BOOKING_RULES.slotStepMinutes !== 0) throw validationError(`${label} 30 dakikalık aralıklara uygun olmalıdır.`);
+  return hour * 60 + minute;
 }
 
 function normalizeText(value, min, max, label) {

@@ -14,6 +14,7 @@ label{display:block;font-size:12px;font-weight:700;margin-bottom:7px}input,selec
 .shell{display:none}.shell.active{display:block}.topbar{height:66px;background:#fff;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;padding:0 28px;position:sticky;top:0;z-index:5}.logout{border:1px solid var(--border);background:#fff;padding:8px 13px;border-radius:6px;cursor:pointer}
 .content{max-width:1240px;margin:0 auto;padding:30px 24px 60px}.heading{display:flex;align-items:end;justify-content:space-between;gap:18px;margin-bottom:22px}.heading h1{font-size:28px}.tabs{display:flex;gap:7px;flex-wrap:wrap}.tab{border:1px solid var(--border);background:#fff;border-radius:20px;padding:8px 13px;font-size:12px;font-weight:700;cursor:pointer}.tab.active{background:var(--accent);border-color:var(--accent);color:#fff}
 .layout{display:grid;grid-template-columns:minmax(0,2fr) minmax(300px,1fr);gap:20px}.card{background:#fff;border:1px solid var(--border);border-radius:11px;padding:20px}.card h2{font-size:17px;margin:0 0 16px}.appointments{display:flex;flex-direction:column;gap:11px}.appointment{border:1px solid var(--border);border-radius:9px;padding:16px}.appointment-top{display:flex;justify-content:space-between;gap:12px}.appointment h3{font-size:15px;margin:0 0 5px}.meta{font-size:12px;line-height:1.65;color:var(--muted)}.note{font-size:13px;background:var(--bg);padding:10px;border-radius:6px;margin-top:10px;line-height:1.5}.badge{height:max-content;padding:5px 8px;border-radius:12px;font-size:10px;font-weight:800}.PENDING{background:#fff1d3;color:var(--warn)}.APPROVED{background:var(--light);color:var(--accent)}.REJECTED,.CANCELLED{background:#fae9e9;color:var(--danger)}.EXPIRED{background:#eee;color:#666}.CONFLICT{background:#f8e8ce;color:#8b5200}
+.aside-stack{display:flex;flex-direction:column;gap:20px}.weekday-options{display:flex;gap:5px;flex-wrap:wrap}.weekday-options label{margin:0}.weekday-options input{position:absolute;opacity:0;pointer-events:none}.weekday-options span{display:block;border:1px solid var(--border);border-radius:6px;padding:7px 9px;font-size:11px;cursor:pointer}.weekday-options input:checked+span{background:var(--accent);border-color:var(--accent);color:#fff}.form-grid{display:grid;grid-template-columns:1fr 1fr;gap:11px}.form-grid .full{grid-column:1/-1}.rule-list{display:flex;flex-direction:column;gap:8px;margin-top:18px}.rule{border-top:1px solid var(--border);padding-top:11px;display:flex;justify-content:space-between;gap:10px}.rule button{border:0;background:transparent;color:var(--danger);cursor:pointer}
 .actions{display:flex;gap:7px;flex-wrap:wrap;margin-top:12px}.action{border:1px solid var(--border);background:#fff;border-radius:6px;padding:7px 10px;font-size:11px;font-weight:700;cursor:pointer}.action.approve{background:var(--accent);color:#fff;border-color:var(--accent)}.action.reject{color:var(--danger)}
 .block-form{display:grid;gap:12px}.block-list{display:flex;flex-direction:column;gap:8px;margin-top:18px}.block{border-top:1px solid var(--border);padding-top:11px;display:flex;justify-content:space-between;gap:10px}.block button{border:0;background:transparent;color:var(--danger);cursor:pointer}.empty{text-align:center;color:var(--muted);padding:45px 15px;font-size:13px}.toast{position:fixed;right:20px;bottom:20px;background:var(--accent);color:#fff;padding:12px 17px;border-radius:7px;font-size:13px;box-shadow:0 8px 25px rgba(0,0,0,.2);display:none}.toast.show{display:block}
 @media(max-width:900px){.layout{grid-template-columns:1fr}.heading{align-items:start;flex-direction:column}.topbar{padding:0 18px}.content{padding:22px 14px}.appointment-top{flex-direction:column}}
@@ -24,7 +25,7 @@ label{display:block;font-size:12px;font-weight:700;margin-bottom:7px}input,selec
   <form class="login-card" id="login-form">
     <div class="logo">CEM<span>.</span>AVAT</div>
     <h1>Randevu Yönetimi</h1>
-    <p class="sub">Talepleri değerlendirmek ve müsait olmayan zamanları kapatmak için giriş yapın.</p>
+    <p class="sub">Randevuları değerlendirmek ve hizmet bazlı müsaitliklerinizi yönetmek için giriş yapın.</p>
     <div class="error" id="login-error"></div>
     <label for="password">Yönetici şifresi</label>
     <input type="password" id="password" autocomplete="current-password" required>
@@ -35,18 +36,35 @@ label{display:block;font-size:12px;font-weight:700;margin-bottom:7px}input,selec
 <div class="shell" id="dashboard">
   <header class="topbar"><div class="logo" style="margin:0">CEM<span>.</span>AVAT · Yönetim</div><button class="logout" id="logout">Çıkış</button></header>
   <main class="content">
-    <div class="heading"><div><h1>Randevular</h1><p class="sub" style="margin:5px 0 0">Bekleyen talepleri onaylayın, reddedin veya onaylı görüşmeleri iptal edin.</p></div><div class="tabs" id="filters"></div></div>
+    <div class="heading"><div><h1>Randevular</h1><p class="sub" style="margin:5px 0 0">Seçilen saatleri onaylayın veya reddedin; hizmet bazlı çalışma aralıklarını yönetin.</p></div><div class="tabs" id="filters"></div></div>
     <div class="layout">
       <section class="card"><div class="appointments" id="appointments"><div class="empty">Yükleniyor…</div></div></section>
-      <aside class="card">
-        <h2>Müsait zamanı kapat</h2>
-        <form class="block-form" id="block-form">
-          <div><label for="block-start">Başlangıç</label><input id="block-start" type="datetime-local" required></div>
-          <div><label for="block-end">Bitiş</label><input id="block-end" type="datetime-local" required></div>
-          <div><label for="block-reason">Açıklama</label><input id="block-reason" maxlength="200" placeholder="Örn. Antrenman, izin"></div>
-          <button class="primary" type="submit">Zamanı kapat</button>
-        </form>
-        <div class="block-list" id="blocks"></div>
+      <aside class="aside-stack">
+        <section class="card">
+          <h2>Hizmet müsaitliği ekle</h2>
+          <form class="block-form" id="rule-form">
+            <div><label for="rule-service">Hizmet / branş</label><select id="rule-service" required><option value="">Hizmet seçin</option></select></div>
+            <div class="form-grid">
+              <div><label for="rule-from">Başlangıç tarihi</label><input id="rule-from" type="date" required></div>
+              <div><label for="rule-to">Bitiş tarihi</label><input id="rule-to" type="date" required></div>
+              <div><label for="rule-start">Başlangıç saati</label><input id="rule-start" type="time" step="1800" value="10:00" required></div>
+              <div><label for="rule-end">Bitiş saati</label><input id="rule-end" type="time" step="1800" value="18:00" required></div>
+              <div class="full"><label>Sunulacak günler</label><div class="weekday-options"><label><input type="checkbox" value="1" checked><span>Pzt</span></label><label><input type="checkbox" value="2" checked><span>Sal</span></label><label><input type="checkbox" value="3" checked><span>Çar</span></label><label><input type="checkbox" value="4" checked><span>Per</span></label><label><input type="checkbox" value="5" checked><span>Cum</span></label></div></div>
+            </div>
+            <button class="primary" type="submit">Müsaitliği yayınla</button>
+          </form>
+          <div class="rule-list" id="rules"></div>
+        </section>
+        <section class="card">
+          <h2>İstisna olarak zamanı kapat</h2>
+          <form class="block-form" id="block-form">
+            <div><label for="block-start">Başlangıç</label><input id="block-start" type="datetime-local" required></div>
+            <div><label for="block-end">Bitiş</label><input id="block-end" type="datetime-local" required></div>
+            <div><label for="block-reason">Açıklama</label><input id="block-reason" maxlength="200" placeholder="Örn. Antrenman, izin"></div>
+            <button class="primary" type="submit">Zamanı kapat</button>
+          </form>
+          <div class="block-list" id="blocks"></div>
+        </section>
       </aside>
     </div>
   </main>
@@ -56,7 +74,7 @@ label{display:block;font-size:12px;font-weight:700;margin-bottom:7px}input,selec
 <script>
 const filters=['','PENDING','APPROVED','CONFLICT','REJECTED','EXPIRED','CANCELLED'];
 const labels={PENDING:'Bekliyor',APPROVED:'Onaylandı',REJECTED:'Reddedildi',EXPIRED:'Süresi doldu',CANCELLED:'İptal',CONFLICT:'Çakışma'};
-let csrfToken='';let activeFilter='';
+let csrfToken='';let activeFilter='';let serviceNames={};
 const loginView=document.getElementById('login-view');const dashboard=document.getElementById('dashboard');
 
 async function api(url,options={}){
@@ -82,7 +100,8 @@ document.getElementById('login-form').addEventListener('submit',async event=>{
 document.getElementById('logout').addEventListener('click',async()=>{try{await api('/api/admin/logout',{method:'POST'})}finally{showLogin()}});
 
 function renderFilters(){const host=document.getElementById('filters');host.innerHTML='';filters.forEach(status=>{const button=document.createElement('button');button.className='tab'+(activeFilter===status?' active':'');button.textContent=status?labels[status]:'Tümü';button.onclick=()=>{activeFilter=status;renderFilters();loadAppointments()};host.appendChild(button)})}
-async function loadAll(){await Promise.all([loadAppointments(),loadBlocks()])}
+async function loadAll(){await loadServiceOptions();await Promise.all([loadAppointments(),loadBlocks(),loadRules()])}
+async function loadServiceOptions(){const result=await api('/api/services');const select=document.getElementById('rule-service');if(select.options.length>1)return;result.services.forEach(service=>{serviceNames[service.id]=service.name;const option=document.createElement('option');option.value=service.id;option.textContent=service.name;select.appendChild(option)})}
 async function loadAppointments(){const host=document.getElementById('appointments');host.innerHTML='<div class="empty">Yükleniyor…</div>';try{const result=await api('/api/admin/appointments'+(activeFilter?'?status='+activeFilter:''));renderAppointments(result.appointments)}catch(err){host.innerHTML='<div class="empty">'+esc(err.message)+'</div>'}}
 function renderAppointments(items){const host=document.getElementById('appointments');if(!items.length){host.innerHTML='<div class="empty">Bu filtrede randevu bulunmuyor.</div>';return}host.innerHTML=items.map(item=>{
   const actions=['PENDING','CONFLICT'].includes(item.status)?'<button class="action approve" data-action="approve">Onayla</button><button class="action reject" data-action="reject">Reddet</button>':item.status==='APPROVED'?'<button class="action reject" data-action="cancel">İptal et</button>':'';
@@ -93,6 +112,10 @@ async function decide(id,action){const messages={approve:'Bu talebi onaylamak is
 document.getElementById('block-form').addEventListener('submit',async event=>{event.preventDefault();const start=document.getElementById('block-start').value;const end=document.getElementById('block-end').value;try{await api('/api/admin/blocks',{method:'POST',body:JSON.stringify({start:new Date(start).toISOString(),end:new Date(end).toISOString(),reason:document.getElementById('block-reason').value})});event.currentTarget.reset();toast('Zaman kapatıldı.');loadBlocks()}catch(err){alert(err.message)}});
 async function loadBlocks(){const host=document.getElementById('blocks');try{const result=await api('/api/admin/blocks');host.innerHTML=result.blocks.length?result.blocks.map(block=>'<div class="block" data-id="'+esc(block.id)+'"><div class="meta"><strong>'+formatDate(block.start_at)+'</strong><br>'+formatDate(block.end_at)+(block.reason?'<br>'+esc(block.reason):'')+'</div><button title="Sil">✕</button></div>').join(''):'<div class="empty" style="padding:20px 0">Yaklaşan kapalı zaman yok.</div>';host.querySelectorAll('.block button').forEach(button=>button.onclick=()=>deleteBlock(button.closest('[data-id]').dataset.id))}catch(err){host.innerHTML='<div class="empty">'+esc(err.message)+'</div>'}}
 async function deleteBlock(id){if(!confirm('Bu kapalı zamanı silmek istiyor musunuz?'))return;try{await api('/api/admin/blocks/'+encodeURIComponent(id),{method:'DELETE'});toast('Kapalı zaman silindi.');loadBlocks()}catch(err){alert(err.message)}}
+document.getElementById('rule-form').addEventListener('submit',async event=>{event.preventDefault();const weekdays=[...event.currentTarget.querySelectorAll('.weekday-options input:checked')].map(input=>Number(input.value));try{await api('/api/admin/availability-rules',{method:'POST',body:JSON.stringify({serviceId:document.getElementById('rule-service').value,dateFrom:document.getElementById('rule-from').value,dateTo:document.getElementById('rule-to').value,startTime:document.getElementById('rule-start').value,endTime:document.getElementById('rule-end').value,weekdays})});toast('Müsaitlik yayınlandı.');loadRules()}catch(err){alert(err.message)}});
+async function loadRules(){const host=document.getElementById('rules');try{const result=await api('/api/admin/availability-rules');host.innerHTML=result.rules.length?result.rules.map(rule=>'<div class="rule" data-id="'+esc(rule.id)+'"><div class="meta"><strong>'+esc(serviceNames[rule.service_id]||rule.service_id)+'</strong><br>'+formatDateKey(rule.date_from)+' – '+formatDateKey(rule.date_to)+'<br>'+formatWeekdays(rule.weekdays)+' · '+formatMinute(rule.start_minute)+'–'+formatMinute(rule.end_minute)+'</div><button title="Sil">✕</button></div>').join(''):'<div class="empty" style="padding:20px 0">Henüz yayınlanmış müsaitlik yok.</div>';host.querySelectorAll('.rule button').forEach(button=>button.onclick=()=>deleteRule(button.closest('[data-id]').dataset.id))}catch(err){host.innerHTML='<div class="empty">'+esc(err.message)+'</div>'}}
+async function deleteRule(id){if(!confirm('Bu müsaitlik kuralını kaldırmak istiyor musunuz?'))return;try{await api('/api/admin/availability-rules/'+encodeURIComponent(id),{method:'DELETE'});toast('Müsaitlik kaldırıldı.');loadRules()}catch(err){alert(err.message)}}
+function formatDateKey(value){return new Intl.DateTimeFormat('tr-TR',{dateStyle:'medium',timeZone:'UTC'}).format(new Date(value+'T00:00:00Z'))}function formatMinute(value){return String(Math.floor(value/60)).padStart(2,'0')+':'+String(value%60).padStart(2,'0')}function formatWeekdays(value){const names={1:'Pzt',2:'Sal',3:'Çar',4:'Per',5:'Cum'};return String(value).split(',').map(day=>names[day]).join(', ')}
 function formatDate(value){return new Intl.DateTimeFormat('tr-TR',{dateStyle:'medium',timeStyle:'short',timeZone:'Europe/Istanbul'}).format(new Date(value))}
 function esc(value){const div=document.createElement('div');div.textContent=String(value??'');return div.innerHTML}
 restoreSession();

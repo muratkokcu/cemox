@@ -5,11 +5,12 @@ Harici randevu servisi kullanmadan çalışan Node.js, SQLite ve özel yönetim 
 ## Özellikler
 
 - Altı hizmet için 20 dakikalık telefon ön görüşmesi
-- Hafta içi 10:00–18:00, 24 saat minimum bildirim, 30 günlük rezervasyon penceresi
-- Talep geldiğinde saati 24 saat tutma ve eşzamanlı rezervasyon koruması
+- Hizmet bazında tarih aralığı, hafta günleri ve çalışma saatleri yayınlama
+- Aylık takvimde yalnızca yayınlanmış ve boş gün/saatleri gösterme
+- Seçilen saati 24 saat tutan yönetici onay akışı ve eşzamanlı çakışma koruması
 - Şifreli yönetim panelinden onay, ret ve iptal
-- Yönetim panelinden tarih/saat aralığı kapatma
-- SMTP üzerinden talep ve durum e-postaları
+- Yönetim panelinden yayınlanmış müsaitliklere ek olarak istisnai tarih/saat kapatma
+- SMTP üzerinden rezervasyon ve durum e-postaları
 - SQLite transaction, admin session, CSRF, origin kontrolü ve rate limiting
 
 ## Yerel kurulum

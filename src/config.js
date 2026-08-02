@@ -12,8 +12,6 @@ export const SERVICES = Object.freeze({
 export const BOOKING_RULES = Object.freeze({
   timezone: 'Europe/Istanbul',
   utcOffsetMinutes: 180,
-  workStartHour: 10,
-  workEndHour: 18,
   slotMinutes: 20,
   bufferMinutes: 10,
   slotStepMinutes: 30,

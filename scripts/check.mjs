@@ -17,6 +17,7 @@ assert.match(adminCode, /\/api\/admin\/availability-slots/);
 assert.equal([...configCode.matchAll(/^  '[^']+':/gm)].length, 6, 'Altı hizmet yapılandırılmış olmalı.');
 assert.match(serverCode, /requireCsrf/);
 assert.match(serverCode, /requireSameOrigin/);
-assert.match(serverCode, /express\.static\(webRoot/);
+assert.match(serverCode, /Cache-Control', 'no-cache/);
+assert.match(serverCode, /express\.static\(path\.join\(webRoot, 'assets'\)/);
 
 console.log('React integration checks: OK');

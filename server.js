@@ -150,9 +150,13 @@ export function createApp({ config = loadConfig(), database = null, emailService
   app.use('/galery', express.static(path.join(rootDir, 'galery'), { maxAge: config.production ? '30d' : 0, immutable: config.production }));
   const webRoot = path.join(rootDir, 'dist');
   if (fs.existsSync(webRoot)) {
-    app.use(express.static(webRoot, { maxAge: config.production ? '1d' : 0 }));
-    app.get('/', (_req, res) => res.sendFile(path.join(webRoot, 'index.html')));
-    app.get('/admin', (_req, res) => res.sendFile(path.join(webRoot, 'index.html')));
+    app.use('/assets', express.static(path.join(webRoot, 'assets'), { maxAge: config.production ? '1y' : 0, immutable: config.production }));
+    const sendWebApp = (_req, res) => {
+      res.set('Cache-Control', 'no-cache');
+      res.sendFile(path.join(webRoot, 'index.html'));
+    };
+    app.get('/', sendWebApp);
+    app.get('/admin', sendWebApp);
   }
 
   app.use('/api', (_req, res) => res.status(404).json({ error: { code: 'NOT_FOUND', message: 'API yolu bulunamadı.' } }));

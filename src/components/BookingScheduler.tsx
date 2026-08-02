@@ -12,7 +12,7 @@ type FormState = {
 
 const emptyForm: FormState = { name: '', email: '', phone: '', note: '', consent: false, website: '' };
 
-export function BookingScheduler() {
+export function BookingScheduler({ preferredServiceId = '' }: { preferredServiceId?: string }) {
   const [services, setServices] = useState<Service[]>([]);
   const [serviceId, setServiceId] = useState('');
   const [availability, setAvailability] = useState<Availability | null>(null);
@@ -35,6 +35,10 @@ export function BookingScheduler() {
       })
       .catch(err => setError(err.message));
   }, []);
+
+  useEffect(() => {
+    if (preferredServiceId && services.some(service => service.id === preferredServiceId)) setServiceId(preferredServiceId);
+  }, [preferredServiceId, services]);
 
   useEffect(() => {
     if (!serviceId) return;

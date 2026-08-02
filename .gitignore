@@ -7,6 +7,8 @@ Thumbs.db
 
 # Full-custom randevu uygulaması
 node_modules/
+dist/
+*.tsbuildinfo
 .env
 data/
 npm-debug.log*

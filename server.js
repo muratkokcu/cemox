@@ -148,9 +148,12 @@ export function createApp({ config = loadConfig(), database = null, emailService
 
   app.use('/assets', express.static(path.join(rootDir, 'assets'), { maxAge: config.production ? '30d' : 0, immutable: config.production }));
   app.use('/galery', express.static(path.join(rootDir, 'galery'), { maxAge: config.production ? '30d' : 0, immutable: config.production }));
-  app.use('/public', express.static(path.join(rootDir, 'public'), { maxAge: config.production ? '1d' : 0 }));
-  app.get('/', (_req, res) => res.sendFile(path.join(rootDir, 'cem-avat-website.html')));
-  app.get('/admin', (_req, res) => res.sendFile(path.join(rootDir, 'admin.html')));
+  const webRoot = path.join(rootDir, 'dist');
+  if (fs.existsSync(webRoot)) {
+    app.use(express.static(webRoot, { maxAge: config.production ? '1d' : 0 }));
+    app.get('/', (_req, res) => res.sendFile(path.join(webRoot, 'index.html')));
+    app.get('/admin', (_req, res) => res.sendFile(path.join(webRoot, 'index.html')));
+  }
 
   app.use('/api', (_req, res) => res.status(404).json({ error: { code: 'NOT_FOUND', message: 'API yolu bulunamadı.' } }));
   app.use((error, _req, res, _next) => {

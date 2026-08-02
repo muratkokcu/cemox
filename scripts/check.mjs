@@ -3,21 +3,20 @@ import assert from 'node:assert/strict';
 
 const serverCode = fs.readFileSync('server.js', 'utf8');
 const configCode = fs.readFileSync('src/config.js', 'utf8');
-const bookingCode = fs.readFileSync('public/booking.js', 'utf8');
-new Function(bookingCode);
+const bookingCode = fs.readFileSync('src/components/BookingScheduler.tsx', 'utf8');
+const adminCode = fs.readFileSync('src/pages/AdminPage.tsx', 'utf8');
+const entryCode = fs.readFileSync('src/main.tsx', 'utf8');
+const indexHtml = fs.readFileSync('index.html', 'utf8');
 
-for (const file of ['cem-avat-website.html', 'admin.html']) {
-  const html = fs.readFileSync(file, 'utf8');
-  for (const match of html.matchAll(/<script>([\s\S]*?)<\/script>/g)) new Function(match[1]);
-  assert.match(html, /<html lang="tr">/);
-}
+assert.match(indexHtml, /<html lang="tr">/);
+assert.match(entryCode, /<AdminPage \/>/);
+assert.match(entryCode, /<HomePage \/>/);
+assert.match(bookingCode, /\/api\/appointments/);
+assert.match(adminCode, /\/api\/admin\/availability-slots/);
 
-const site = fs.readFileSync('cem-avat-website.html', 'utf8');
-const serviceIds = [...site.matchAll(/data-service="([^"]+)"/g)].map(match => match[1]);
-assert.equal(serviceIds.length, 6, 'Sitede altı hizmet butonu bulunmalı.');
-assert.equal(new Set(serviceIds).size, 6, 'Hizmet kimlikleri benzersiz olmalı.');
-for (const id of serviceIds) assert.match(configCode, new RegExp(`'${id}'\\s*:`));
+assert.equal([...configCode.matchAll(/^  '[^']+':/gm)].length, 6, 'Altı hizmet yapılandırılmış olmalı.');
 assert.match(serverCode, /requireCsrf/);
 assert.match(serverCode, /requireSameOrigin/);
+assert.match(serverCode, /express\.static\(webRoot/);
 
-console.log('Static integration checks: OK');
+console.log('React integration checks: OK');

@@ -5,16 +5,32 @@
   "type": "module",
   "description": "Cem Avat full-custom appointment system",
   "scripts": {
-    "dev": "node --watch server.js",
+    "dev": "concurrently -k -n api,web -c green,cyan \"npm:dev:api\" \"npm:dev:web\"",
+    "dev:api": "node --watch server.js",
+    "dev:web": "vite",
+    "build": "tsc -b && vite build",
     "start": "node server.js",
     "test": "node --test",
-    "check": "node --check server.js && node --check src/config.js && node --check src/db.js && node --check src/email.js && node scripts/check.mjs"
+    "check": "tsc -b && node --check server.js && node --check src/config.js && node --check src/db.js && node --check src/email.js && node scripts/check.mjs"
   },
   "engines": {
     "node": ">=24"
   },
   "dependencies": {
     "express": "^5.1.0",
-    "nodemailer": "^9.0.3"
+    "lucide-react": "^1.28.0",
+    "nodemailer": "^9.0.3",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.3.3",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.4",
+    "@vitejs/plugin-react": "^6.0.5",
+    "concurrently": "^10.0.4",
+    "tailwindcss": "^4.3.3",
+    "typescript": "^7.0.2",
+    "vite": "^8.2.0"
   }
 }

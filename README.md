@@ -1,12 +1,13 @@
 # Cem Avat — Full-Custom Randevu Sistemi
 
-Harici randevu servisi kullanmadan çalışan Node.js, SQLite ve özel yönetim paneli tabanlı web uygulaması.
+Harici randevu servisi kullanmadan çalışan React, TypeScript, Express ve SQLite tabanlı web uygulaması.
 
 ## Özellikler
 
 - Altı hizmet için 20 dakikalık telefon ön görüşmesi
-- Haftalık admin takviminde branş bazında 30 dakikalık saatleri açık/kapalı yapma
-- Aylık takvimde yalnızca yayınlanmış ve boş gün/saatleri gösterme
+- Cal.com benzeri ay takvimi ve seçili güne ait dikey saat listesi
+- Admin takviminde branş bazında 30 dakikalık saatleri açık/kapalı yapma
+- React 19, Vite ve Tailwind CSS ile responsive kullanıcı ve yönetim ekranları
 - Seçilen saati 24 saat tutan yönetici onay akışı ve eşzamanlı çakışma koruması
 - Şifreli yönetim panelinden onay, ret ve iptal
 - Yönetim panelinden yayınlanmış müsaitliklere ek olarak istisnai tarih/saat kapatma
@@ -23,9 +24,11 @@ cp .env.example .env
 npm run dev
 ```
 
-Site: `http://localhost:4100`
+Vite geliştirme arayüzü: `http://localhost:5173`
 
-Yönetim paneli: `http://localhost:4100/admin`
+Yönetim paneli: `http://localhost:5173/admin`
+
+Express API geliştirme sırasında `http://localhost:4100` adresinde çalışır ve Vite tarafından proxy’lenir. Üretim derlemesinde hem site hem API `4100` portundan sunulur.
 
 `.env` içinde özellikle şu değerleri değiştirin:
 
@@ -40,6 +43,7 @@ SMTP tanımlanmadan development ortamında randevu işlemleri çalışır; e-pos
 
 ```bash
 npm run check
+npm run build
 npm test
 npm audit
 ```

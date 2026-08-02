@@ -1,0 +1,20 @@
+{
+  "name": "cemox-appointment-system",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Cem Avat full-custom appointment system",
+  "scripts": {
+    "dev": "node --watch server.js",
+    "start": "node server.js",
+    "test": "node --test",
+    "check": "node --check server.js && node --check src/config.js && node --check src/db.js && node --check src/email.js && node scripts/check.mjs"
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "dependencies": {
+    "express": "^5.1.0",
+    "nodemailer": "^9.0.3"
+  }
+}

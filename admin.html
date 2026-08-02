@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Randevu Yönetimi — Cem Avat</title>
+<style>
+:root{--bg:#f5f5f2;--surface:#fff;--border:#dddcd6;--text:#1a1a18;--muted:#686862;--accent:#1a3a2a;--accent2:#2d5e42;--light:#e8f0eb;--gold:#b8963e;--danger:#a13232;--warn:#8a6418}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font-family:Arial,sans-serif}button,input,select,textarea{font:inherit}
+.login{min-height:100vh;display:grid;place-items:center;padding:24px}.login-card{width:min(420px,100%);background:#fff;border:1px solid var(--border);border-radius:14px;padding:34px;box-shadow:0 18px 50px rgba(0,0,0,.08)}
+.logo{font-size:19px;font-weight:800;color:var(--accent);margin-bottom:28px}.logo span{color:var(--gold)}h1{font-size:25px;margin:0 0 8px}.sub{color:var(--muted);font-size:14px;line-height:1.6;margin:0 0 24px}
+label{display:block;font-size:12px;font-weight:700;margin-bottom:7px}input,select,textarea{width:100%;border:1px solid var(--border);border-radius:7px;padding:11px 12px;background:#fff;color:var(--text)}input:focus,select:focus,textarea:focus{outline:3px solid rgba(45,94,66,.13);border-color:var(--accent2)}
+.primary{width:100%;border:0;border-radius:7px;padding:12px 17px;background:var(--accent);color:#fff;font-weight:700;cursor:pointer}.primary:disabled{opacity:.6}.error{display:none;background:#fae9e9;color:var(--danger);padding:11px 13px;border-radius:7px;font-size:13px;margin-bottom:15px}.error.show{display:block}
+.shell{display:none}.shell.active{display:block}.topbar{height:66px;background:#fff;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;padding:0 28px;position:sticky;top:0;z-index:5}.logout{border:1px solid var(--border);background:#fff;padding:8px 13px;border-radius:6px;cursor:pointer}
+.content{max-width:1240px;margin:0 auto;padding:30px 24px 60px}.heading{display:flex;align-items:end;justify-content:space-between;gap:18px;margin-bottom:22px}.heading h1{font-size:28px}.tabs{display:flex;gap:7px;flex-wrap:wrap}.tab{border:1px solid var(--border);background:#fff;border-radius:20px;padding:8px 13px;font-size:12px;font-weight:700;cursor:pointer}.tab.active{background:var(--accent);border-color:var(--accent);color:#fff}
+.layout{display:grid;grid-template-columns:minmax(0,2fr) minmax(300px,1fr);gap:20px}.card{background:#fff;border:1px solid var(--border);border-radius:11px;padding:20px}.card h2{font-size:17px;margin:0 0 16px}.appointments{display:flex;flex-direction:column;gap:11px}.appointment{border:1px solid var(--border);border-radius:9px;padding:16px}.appointment-top{display:flex;justify-content:space-between;gap:12px}.appointment h3{font-size:15px;margin:0 0 5px}.meta{font-size:12px;line-height:1.65;color:var(--muted)}.note{font-size:13px;background:var(--bg);padding:10px;border-radius:6px;margin-top:10px;line-height:1.5}.badge{height:max-content;padding:5px 8px;border-radius:12px;font-size:10px;font-weight:800}.PENDING{background:#fff1d3;color:var(--warn)}.APPROVED{background:var(--light);color:var(--accent)}.REJECTED,.CANCELLED{background:#fae9e9;color:var(--danger)}.EXPIRED{background:#eee;color:#666}.CONFLICT{background:#f8e8ce;color:#8b5200}
+.actions{display:flex;gap:7px;flex-wrap:wrap;margin-top:12px}.action{border:1px solid var(--border);background:#fff;border-radius:6px;padding:7px 10px;font-size:11px;font-weight:700;cursor:pointer}.action.approve{background:var(--accent);color:#fff;border-color:var(--accent)}.action.reject{color:var(--danger)}
+.block-form{display:grid;gap:12px}.block-list{display:flex;flex-direction:column;gap:8px;margin-top:18px}.block{border-top:1px solid var(--border);padding-top:11px;display:flex;justify-content:space-between;gap:10px}.block button{border:0;background:transparent;color:var(--danger);cursor:pointer}.empty{text-align:center;color:var(--muted);padding:45px 15px;font-size:13px}.toast{position:fixed;right:20px;bottom:20px;background:var(--accent);color:#fff;padding:12px 17px;border-radius:7px;font-size:13px;box-shadow:0 8px 25px rgba(0,0,0,.2);display:none}.toast.show{display:block}
+@media(max-width:900px){.layout{grid-template-columns:1fr}.heading{align-items:start;flex-direction:column}.topbar{padding:0 18px}.content{padding:22px 14px}.appointment-top{flex-direction:column}}
+</style>
+</head>
+<body>
+<section class="login" id="login-view">
+  <form class="login-card" id="login-form">
+    <div class="logo">CEM<span>.</span>AVAT</div>
+    <h1>Randevu Yönetimi</h1>
+    <p class="sub">Talepleri değerlendirmek ve müsait olmayan zamanları kapatmak için giriş yapın.</p>
+    <div class="error" id="login-error"></div>
+    <label for="password">Yönetici şifresi</label>
+    <input type="password" id="password" autocomplete="current-password" required>
+    <button class="primary" style="margin-top:16px" type="submit">Giriş yap</button>
+  </form>
+</section>
+
+<div class="shell" id="dashboard">
+  <header class="topbar"><div class="logo" style="margin:0">CEM<span>.</span>AVAT · Yönetim</div><button class="logout" id="logout">Çıkış</button></header>
+  <main class="content">
+    <div class="heading"><div><h1>Randevular</h1><p class="sub" style="margin:5px 0 0">Bekleyen talepleri onaylayın, reddedin veya onaylı görüşmeleri iptal edin.</p></div><div class="tabs" id="filters"></div></div>
+    <div class="layout">
+      <section class="card"><div class="appointments" id="appointments"><div class="empty">Yükleniyor…</div></div></section>
+      <aside class="card">
+        <h2>Müsait zamanı kapat</h2>
+        <form class="block-form" id="block-form">
+          <div><label for="block-start">Başlangıç</label><input id="block-start" type="datetime-local" required></div>
+          <div><label for="block-end">Bitiş</label><input id="block-end" type="datetime-local" required></div>
+          <div><label for="block-reason">Açıklama</label><input id="block-reason" maxlength="200" placeholder="Örn. Antrenman, izin"></div>
+          <button class="primary" type="submit">Zamanı kapat</button>
+        </form>
+        <div class="block-list" id="blocks"></div>
+      </aside>
+    </div>
+  </main>
+</div>
+<div class="toast" id="toast" role="status"></div>
+
+<script>
+const filters=['','PENDING','APPROVED','CONFLICT','REJECTED','EXPIRED','CANCELLED'];
+const labels={PENDING:'Bekliyor',APPROVED:'Onaylandı',REJECTED:'Reddedildi',EXPIRED:'Süresi doldu',CANCELLED:'İptal',CONFLICT:'Çakışma'};
+let csrfToken='';let activeFilter='';
+const loginView=document.getElementById('login-view');const dashboard=document.getElementById('dashboard');
+
+async function api(url,options={}){
+  const headers={'Content-Type':'application/json',...(options.headers||{})};
+  if(csrfToken&&options.method&&options.method!=='GET')headers['x-csrf-token']=csrfToken;
+  const response=await fetch(url,{...options,headers});
+  if(response.status===401){showLogin();throw new Error('Oturum süresi doldu.')}
+  const body=response.status===204?null:await response.json();
+  if(!response.ok)throw new Error(body?.error?.message||'İşlem tamamlanamadı.');
+  return body;
+}
+
+async function restoreSession(){try{const result=await api('/api/admin/session');csrfToken=result.csrfToken;showDashboard()}catch{showLogin()}}
+function showLogin(){csrfToken='';dashboard.classList.remove('active');loginView.style.display='grid'}
+function showDashboard(){loginView.style.display='none';dashboard.classList.add('active');renderFilters();loadAll()}
+function toast(message){const el=document.getElementById('toast');el.textContent=message;el.classList.add('show');setTimeout(()=>el.classList.remove('show'),2600)}
+
+document.getElementById('login-form').addEventListener('submit',async event=>{
+  event.preventDefault();const button=event.currentTarget.querySelector('button');const error=document.getElementById('login-error');button.disabled=true;error.classList.remove('show');
+  try{const result=await api('/api/admin/login',{method:'POST',body:JSON.stringify({password:document.getElementById('password').value})});csrfToken=result.csrfToken;document.getElementById('password').value='';showDashboard()}
+  catch(err){error.textContent=err.message;error.classList.add('show')}finally{button.disabled=false}
+});
+document.getElementById('logout').addEventListener('click',async()=>{try{await api('/api/admin/logout',{method:'POST'})}finally{showLogin()}});
+
+function renderFilters(){const host=document.getElementById('filters');host.innerHTML='';filters.forEach(status=>{const button=document.createElement('button');button.className='tab'+(activeFilter===status?' active':'');button.textContent=status?labels[status]:'Tümü';button.onclick=()=>{activeFilter=status;renderFilters();loadAppointments()};host.appendChild(button)})}
+async function loadAll(){await Promise.all([loadAppointments(),loadBlocks()])}
+async function loadAppointments(){const host=document.getElementById('appointments');host.innerHTML='<div class="empty">Yükleniyor…</div>';try{const result=await api('/api/admin/appointments'+(activeFilter?'?status='+activeFilter:''));renderAppointments(result.appointments)}catch(err){host.innerHTML='<div class="empty">'+esc(err.message)+'</div>'}}
+function renderAppointments(items){const host=document.getElementById('appointments');if(!items.length){host.innerHTML='<div class="empty">Bu filtrede randevu bulunmuyor.</div>';return}host.innerHTML=items.map(item=>{
+  const actions=['PENDING','CONFLICT'].includes(item.status)?'<button class="action approve" data-action="approve">Onayla</button><button class="action reject" data-action="reject">Reddet</button>':item.status==='APPROVED'?'<button class="action reject" data-action="cancel">İptal et</button>':'';
+  return '<article class="appointment" data-id="'+esc(item.id)+'"><div class="appointment-top"><div><h3>'+esc(item.name)+' · '+esc(item.service_name)+'</h3><div class="meta">'+formatDate(item.start_at)+' · '+esc(item.phone)+' · <a href="mailto:'+esc(item.email)+'">'+esc(item.email)+'</a></div></div><span class="badge '+item.status+'">'+labels[item.status]+'</span></div>'+(item.note?'<div class="note">'+esc(item.note)+'</div>':'')+(item.admin_note?'<div class="meta" style="margin-top:8px">Yönetici notu: '+esc(item.admin_note)+'</div>':'')+(actions?'<div class="actions">'+actions+'</div>':'')+'</article>'
+}).join('');host.querySelectorAll('[data-action]').forEach(button=>button.onclick=()=>decide(button.closest('[data-id]').dataset.id,button.dataset.action))}
+async function decide(id,action){const messages={approve:'Bu talebi onaylamak istiyor musunuz?',reject:'Ret nedenini yazabilirsiniz:',cancel:'İptal açıklamasını yazabilirsiniz:'};let adminNote='';if(action==='approve'){if(!confirm(messages[action]))return}else{const note=prompt(messages[action],'');if(note===null)return;adminNote=note}try{await api('/api/admin/appointments/'+encodeURIComponent(id),{method:'PATCH',body:JSON.stringify({action,adminNote})});toast('Randevu güncellendi.');loadAppointments()}catch(err){alert(err.message);loadAppointments()}}
+
+document.getElementById('block-form').addEventListener('submit',async event=>{event.preventDefault();const start=document.getElementById('block-start').value;const end=document.getElementById('block-end').value;try{await api('/api/admin/blocks',{method:'POST',body:JSON.stringify({start:new Date(start).toISOString(),end:new Date(end).toISOString(),reason:document.getElementById('block-reason').value})});event.currentTarget.reset();toast('Zaman kapatıldı.');loadBlocks()}catch(err){alert(err.message)}});
+async function loadBlocks(){const host=document.getElementById('blocks');try{const result=await api('/api/admin/blocks');host.innerHTML=result.blocks.length?result.blocks.map(block=>'<div class="block" data-id="'+esc(block.id)+'"><div class="meta"><strong>'+formatDate(block.start_at)+'</strong><br>'+formatDate(block.end_at)+(block.reason?'<br>'+esc(block.reason):'')+'</div><button title="Sil">✕</button></div>').join(''):'<div class="empty" style="padding:20px 0">Yaklaşan kapalı zaman yok.</div>';host.querySelectorAll('.block button').forEach(button=>button.onclick=()=>deleteBlock(button.closest('[data-id]').dataset.id))}catch(err){host.innerHTML='<div class="empty">'+esc(err.message)+'</div>'}}
+async function deleteBlock(id){if(!confirm('Bu kapalı zamanı silmek istiyor musunuz?'))return;try{await api('/api/admin/blocks/'+encodeURIComponent(id),{method:'DELETE'});toast('Kapalı zaman silindi.');loadBlocks()}catch(err){alert(err.message)}}
+function formatDate(value){return new Intl.DateTimeFormat('tr-TR',{dateStyle:'medium',timeStyle:'short',timeZone:'Europe/Istanbul'}).format(new Date(value))}
+function esc(value){const div=document.createElement('div');div.textContent=String(value??'');return div.innerHTML}
+restoreSession();
+</script>
+</body>
+</html>

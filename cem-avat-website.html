@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Cem Avat — Medical Fitness & Performance</title>
 <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=Manrope:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+<link href="/public/booking.css" rel="stylesheet">
 <style>
 :root {
   --bg: #FAFAF8;
@@ -75,6 +76,8 @@ section{padding:100px 60px;position:relative}
 .service-num{font-family:'Outfit',sans-serif;font-size:48px;font-weight:800;color:var(--surface);line-height:1;margin-bottom:20px}
 .service-card h3{font-family:'Outfit',sans-serif;font-size:18px;font-weight:700;color:var(--text);margin-bottom:12px;letter-spacing:-0.3px}
 .service-card p{font-size:14px;line-height:1.75;color:var(--text-secondary);font-weight:400}
+.service-booking-btn{margin-top:24px;padding:0;border:0;background:transparent;color:var(--accent-mid);font-family:'Manrope',sans-serif;font-size:13px;font-weight:700;cursor:pointer}
+.service-booking-btn:hover{text-decoration:underline;text-underline-offset:4px}
 
 .cred-grid{display:grid;grid-template-columns:1fr 1fr;gap:56px}
 .cred-block h3{font-family:'Outfit',sans-serif;font-size:20px;color:var(--text);margin-bottom:24px;font-weight:700;letter-spacing:-0.3px}
@@ -171,7 +174,7 @@ footer a{color:var(--accent-mid);text-decoration:none;font-weight:600}
     <li><a href="#gallery">Galeri</a></li>
     <li><a href="#contact">İletişim</a></li>
   </ul>
-  <a href="https://wa.me/905512327468?text=Merhaba%20Cem%20Bey%2C%20randevu%20almak%20istiyorum." target="_blank" rel="noopener" class="nav-cta">Randevu Al</a>
+  <button type="button" class="nav-cta booking-trigger">Randevu Al</button>
 </nav>
 
 <section class="hero">
@@ -217,12 +220,12 @@ footer a{color:var(--accent-mid);text-decoration:none;font-weight:600}
   <div class="section-tag">Hizmetler</div>
   <div class="section-title">Uzmanlık Alanları</div>
   <div class="services-grid">
-    <div class="service-card"><div class="service-num">01</div><h3>Medical Fitness</h3><p>Hareket kalitesini desteklemeye, fiziksel kapasiteyi artırmaya ve egzersize kontrollü şekilde uyum sağlamaya yönelik antrenman planları.</p></div>
-    <div class="service-card"><div class="service-num">02</div><h3>Kişisel Antrenman</h3><p>Bireysel hedeflere, kondisyon seviyesine ve yaşam düzenine göre yapılandırılan fitness programları. Güç, dayanıklılık ve genel fiziksel form odağı.</p></div>
-    <div class="service-card"><div class="service-num">03</div><h3>Fonksiyonel Antrenman</h3><p>Denge, koordinasyon, mobilite ve temel kuvvet gelişimini destekleyen; günlük yaşam ve sportif ihtiyaçlara uyarlanmış egzersiz uygulamaları.</p></div>
-    <div class="service-card"><div class="service-num">04</div><h3>Performans Geliştirme</h3><p>Sporcular için fiziksel hazırlık, kuvvet gelişimi ve performans odaklı antrenman planlaması. Branşa ve hedefe göre yapılandırılmış çalışma yaklaşımı.</p></div>
-    <div class="service-card"><div class="service-num">05</div><h3>Kürek Antrenörlüğü</h3><p>Kürek branşına yönelik kondisyon, kuvvet ve destekleyici kara antrenmanı planlamaları. Sporcu geçmişi ve kulüp deneyimiyle yapılandırılmış antrenörlük yaklaşımı.</p></div>
-    <div class="service-card"><div class="service-num">06</div><h3>Korektif Egzersiz Yaklaşımı</h3><p>Doğru hareket alışkanlığını destekleyen, mobilite ve dengeyi geliştirmeye odaklanan egzersiz uygulamalarıyla antrenman kalitesini güçlendirme.</p></div>
+    <div class="service-card"><div class="service-num">01</div><h3>Medical Fitness</h3><p>Hareket kalitesini desteklemeye, fiziksel kapasiteyi artırmaya ve egzersize kontrollü şekilde uyum sağlamaya yönelik antrenman planları.</p><button type="button" class="service-booking-btn booking-trigger" data-service="medical-fitness">Ön görüşme talep et →</button></div>
+    <div class="service-card"><div class="service-num">02</div><h3>Kişisel Antrenman</h3><p>Bireysel hedeflere, kondisyon seviyesine ve yaşam düzenine göre yapılandırılan fitness programları. Güç, dayanıklılık ve genel fiziksel form odağı.</p><button type="button" class="service-booking-btn booking-trigger" data-service="kisisel-antrenman">Ön görüşme talep et →</button></div>
+    <div class="service-card"><div class="service-num">03</div><h3>Fonksiyonel Antrenman</h3><p>Denge, koordinasyon, mobilite ve temel kuvvet gelişimini destekleyen; günlük yaşam ve sportif ihtiyaçlara uyarlanmış egzersiz uygulamaları.</p><button type="button" class="service-booking-btn booking-trigger" data-service="fonksiyonel-antrenman">Ön görüşme talep et →</button></div>
+    <div class="service-card"><div class="service-num">04</div><h3>Performans Geliştirme</h3><p>Sporcular için fiziksel hazırlık, kuvvet gelişimi ve performans odaklı antrenman planlaması. Branşa ve hedefe göre yapılandırılmış çalışma yaklaşımı.</p><button type="button" class="service-booking-btn booking-trigger" data-service="performans-gelistirme">Ön görüşme talep et →</button></div>
+    <div class="service-card"><div class="service-num">05</div><h3>Kürek Antrenörlüğü</h3><p>Kürek branşına yönelik kondisyon, kuvvet ve destekleyici kara antrenmanı planlamaları. Sporcu geçmişi ve kulüp deneyimiyle yapılandırılmış antrenörlük yaklaşımı.</p><button type="button" class="service-booking-btn booking-trigger" data-service="kurek-antrenorlugu">Ön görüşme talep et →</button></div>
+    <div class="service-card"><div class="service-num">06</div><h3>Korektif Egzersiz Yaklaşımı</h3><p>Doğru hareket alışkanlığını destekleyen, mobilite ve dengeyi geliştirmeye odaklanan egzersiz uygulamalarıyla antrenman kalitesini güçlendirme.</p><button type="button" class="service-booking-btn booking-trigger" data-service="korektif-egzersiz">Ön görüşme talep et →</button></div>
   </div>
 </section>
 
@@ -306,6 +309,31 @@ footer a{color:var(--accent-mid);text-decoration:none;font-weight:600}
   <div class="lightbox-counter" id="lightbox-counter"></div>
 </div>
 
+<div class="booking-modal" id="booking-modal" aria-hidden="true">
+  <div class="booking-backdrop" data-booking-close></div>
+  <div class="booking-dialog" role="dialog" aria-modal="true" aria-labelledby="booking-title">
+    <header class="booking-header"><div><span>20 Dakikalık Telefon Görüşmesi</span><h2 id="booking-title">Ön görüşme talebi</h2></div><button type="button" data-booking-close aria-label="Randevu penceresini kapat">✕</button></header>
+    <div class="booking-body" id="booking-body">
+      <div class="booking-alert" id="booking-alert" role="status" aria-live="polite"></div>
+      <div class="booking-field" id="booking-service-field"><label for="booking-service">İlgilendiğiniz hizmet</label><select id="booking-service"><option value="">Hizmet seçin</option></select></div>
+      <section id="booking-availability" hidden><h3>Uygun gün ve saat</h3><div class="booking-days" id="booking-days"></div><div class="booking-slots" id="booking-slots"></div></section>
+      <form id="booking-form" hidden novalidate>
+        <h3 id="booking-summary"></h3>
+        <div class="booking-grid">
+          <div class="booking-field"><label for="booking-name">Ad soyad</label><input id="booking-name" autocomplete="name" maxlength="100" required></div>
+          <div class="booking-field"><label for="booking-phone">Telefon</label><input id="booking-phone" type="tel" autocomplete="tel" maxlength="20" placeholder="+90 5xx xxx xx xx" required></div>
+          <div class="booking-field full"><label for="booking-email">E-posta</label><input id="booking-email" type="email" autocomplete="email" maxlength="160" required></div>
+          <div class="booking-field full"><label for="booking-note">Hedefiniz veya görüşmek istediğiniz konu</label><textarea id="booking-note" maxlength="500" placeholder="Lütfen sağlık raporu veya ayrıntılı tıbbi bilgi yazmayın."></textarea><small><span id="booking-note-count">0</span> / 500</small></div>
+          <div class="booking-honeypot" aria-hidden="true"><label for="booking-website">Web sitesi</label><input id="booking-website" tabindex="-1" autocomplete="off"></div>
+          <div class="booking-field full"><label class="booking-consent"><input id="booking-consent" type="checkbox" required><span>İletişim bilgilerimin randevu talebimin değerlendirilmesi ve yönetilmesi amacıyla işlenmesini kabul ediyorum.</span></label></div>
+        </div>
+        <button class="booking-submit" type="submit">Randevu talebi gönder</button>
+      </form>
+      <div class="booking-success" id="booking-success" hidden><div>✓</div><h3>Talebiniz alındı</h3><p>Seçtiğiniz saat 24 saat boyunca sizin için tutulacak. Talebiniz sonuçlandığında e-posta ile bilgilendirileceksiniz.</p><p id="booking-request-id" style="margin-top:14px;font-size:11px"></p></div>
+    </div>
+  </div>
+</div>
+
 <section id="contact" class="contact-section">
   <div class="section-tag">İletişim</div>
   <div class="section-title">Birlikte Çalışalım</div>
@@ -354,5 +382,6 @@ document.querySelectorAll('a[href^="#"]').forEach(a=>{a.addEventListener('click'
   document.addEventListener('keydown',e=>{if(!lb.classList.contains('active'))return;if(e.key==='Escape')close();else if(e.key==='ArrowLeft')show(idx-1);else if(e.key==='ArrowRight')show(idx+1)});
 })();
 </script>
+<script src="/public/booking.js" defer></script>
 </body>
 </html>

@@ -4,3 +4,9 @@ originals/
 # OS
 .DS_Store
 Thumbs.db
+
+# Full-custom randevu uygulaması
+node_modules/
+.env
+data/
+npm-debug.log*

@@ -150,6 +150,7 @@ a { color: inherit; text-decoration: none; }
 .day-cell.enabled:hover { background: #e1e5e0; transform: translateY(-1px); }
 .day-cell.today:not(.selected) { border-color: #a8afa9; }
 .day-cell.selected { color: white; background: #242724; border-color: #242724; }
+.day-cell.enabled.selected:hover { color: white; background: #242724; border-color: #242724; }
 .day-cell i { position: absolute; bottom: 6px; width: 5px; height: 5px; border-radius: 50%; background: var(--green-2); }
 .day-cell.selected i { background: white; }
 .day-cell.tone-pending i { background: #d58d1e; }

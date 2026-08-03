@@ -32,7 +32,7 @@ export function loadConfig(env = process.env) {
     env: env.NODE_ENV || 'development',
     production,
     port: Number(env.PORT || 4100),
-    appOrigin: String(env.APP_ORIGIN || 'http://localhost:4100').replace(/\/$/, ''),
+    appOrigin: String(env.APP_ORIGIN || (production ? '' : 'http://localhost:5100')).replace(/\/$/, ''),
     databasePath: path.resolve(env.DATABASE_PATH || './data/appointments.sqlite'),
     adminEmail: env.ADMIN_EMAIL || 'cemavat@gmail.com',
     adminPassword,

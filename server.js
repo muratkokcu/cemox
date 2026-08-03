@@ -351,7 +351,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   if (fs.existsSync(envPath)) process.loadEnvFile(envPath);
   const config = loadConfig();
   const { app, db, runMaintenance } = createApp({ config });
-  const server = app.listen(config.port, () => console.log(`Cemox listening on ${config.appOrigin}`));
+  const server = app.listen(config.port, () => console.log(`Cemox API listening on http://localhost:${config.port}`));
   const maintenanceTimer = setInterval(() => runMaintenance().catch(error => console.error('Maintenance failed', error)), 15 * 60 * 1000);
   maintenanceTimer.unref();
   const shutdown = () => server.close(() => { clearInterval(maintenanceTimer); db.close(); process.exit(0); });

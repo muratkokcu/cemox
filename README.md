@@ -24,9 +24,9 @@ cp .env.example .env
 npm run dev
 ```
 
-Vite geliştirme arayüzü: `http://localhost:5173`
+Vite geliştirme arayüzü: `http://localhost:5100`
 
-Yönetim paneli: `http://localhost:5173/admin`
+Yönetim paneli: `http://localhost:5100/admin`
 
 Express API geliştirme sırasında `http://localhost:4100` adresinde çalışır ve Vite tarafından proxy’lenir. Üretim derlemesinde hem site hem API `4100` portundan sunulur.
 

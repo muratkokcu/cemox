@@ -18,7 +18,7 @@ use tower_http::services::ServeDir;
 use tower_http::set_header::SetResponseHeaderLayer;
 
 use crate::config::{BOOKING_RULES, Config, SERVICES, app_root, service_name};
-use crate::db::{AdminSession, Db, NewAppointment};
+use crate::db::{AdminSession, AppointmentQuery, Db, NewAppointment};
 use crate::email::EmailService;
 use crate::error::AppError;
 use crate::time::{
@@ -525,9 +525,64 @@ async fn admin_list_appointments(
     if !ALLOWED.contains(&status.as_str()) {
         return Err(AppError::validation("Geçersiz durum filtresi."));
     }
+
+    let service_id = params.get("service").cloned().unwrap_or_default();
+    if !service_id.is_empty() {
+        assert_service(&service_id)?;
+    }
+
+    // `from`/`to` ikisi birlikte verilir; takvim görünümü gezilen ayı böyle daraltır.
+    let (from, to) = match (
+        optional_timestamp(&params, "from", "Başlangıç")?,
+        optional_timestamp(&params, "to", "Bitiş")?,
+    ) {
+        (None, None) => (0, 0),
+        (from, to) => {
+            let from = from.ok_or_else(|| AppError::validation("Başlangıç geçerli değil."))?;
+            let to = to.ok_or_else(|| AppError::validation("Bitiş geçerli değil."))?;
+            if to <= from || to - from > 366 * DAY_MS {
+                return Err(AppError::validation("Randevu aralığı geçerli değil."));
+            }
+            (from, to)
+        }
+    };
+
+    let query = AppointmentQuery {
+        status,
+        service_id,
+        from,
+        to,
+        limit: parse_count(&params, "limit", 200, 1, 500, "Kayıt sayısı")?,
+        offset: parse_count(&params, "offset", 0, 0, 100_000, "Başlangıç konumu")?,
+    };
+
     let db = state.db.clone();
-    let appointments = blocking(move || db.list_appointments(&status, 200, 0)).await?;
-    Ok(Json(json!({ "appointments": appointments })))
+    let page = blocking(move || db.list_appointments(&query)).await?;
+    Ok(Json(
+        json!({ "appointments": page.appointments, "total": page.total }),
+    ))
+}
+
+/// Sorgu dizesindeki isteğe bağlı tam sayı; boşsa varsayılana düşer, aralık dışıysa hata.
+fn parse_count(
+    params: &HashMap<String, String>,
+    key: &str,
+    fallback: i64,
+    min: i64,
+    max: i64,
+    label: &str,
+) -> Result<i64, AppError> {
+    let Some(raw) = params
+        .get(key)
+        .map(String::as_str)
+        .filter(|value| !value.is_empty())
+    else {
+        return Ok(fallback);
+    };
+    match raw.parse::<i64>() {
+        Ok(count) if (min..=max).contains(&count) => Ok(count),
+        _ => Err(AppError::validation(format!("{label} geçerli değil."))),
+    }
 }
 
 async fn admin_decide_appointment(

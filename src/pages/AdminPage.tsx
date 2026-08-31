@@ -1,12 +1,19 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Ban, CalendarClock, CalendarOff, Check, CircleCheck, CircleX, LoaderCircle, LogOut, Plus, RefreshCw, ShieldCheck, Trash2, TriangleAlert, X } from 'lucide-react';
+import { Ban, CalendarClock, CalendarOff, Check, ChevronDown, CircleCheck, CircleX, LoaderCircle, LogOut, Plus, RefreshCw, ShieldCheck, Trash2, TriangleAlert, X } from 'lucide-react';
 import { MonthCalendar } from '../components/MonthCalendar';
 import { TimeFormatToggle } from '../components/TimeFormatToggle';
 import { api, ApiError } from '../web/api';
 import { addDays, addMonths, DAY_MS, formatBlockRange, formatDateTime, formatMonth, formatSelectedDate, formatTime, localDateKey, monthKey, monthRange, timeOptions, toTimestamp } from '../web/date';
 import type { AdminSlot, Appointment, AppointmentStatus, AvailabilityBlock, Service } from '../web/types';
 
-type DashboardData = { slots: AdminSlot[]; appointments: Appointment[]; blocks: AvailabilityBlock[] };
+/** Takvim görünümünün verisi: gezilen ay ve seçili branşla sınırlı, sayfalanmamış. */
+type DashboardData = { slots: AdminSlot[]; monthAppointments: Appointment[]; blocks: AvailabilityBlock[] };
+/** Randevu listesi: sunucu tarafında filtrelenir ve sayfalanır. */
+type AppointmentList = { items: Appointment[]; total: number };
+
+const PAGE_SIZE = 25;
+/** Takvim bir ayı kapsar; sunucu üst sınırı 500. */
+const CALENDAR_LIMIT = 500;
 type SlotState = 'open' | 'closed' | 'pending' | 'approved' | 'blocked' | 'past';
 type DecisionAction = 'approve' | 'reject' | 'cancel';
 type BlockDraft = {
@@ -102,8 +109,11 @@ function AdminDashboard({ csrf, onExpired }: { csrf: string; onExpired: () => vo
   const [serviceId, setServiceId] = useState('');
   const [month, setMonth] = useState(monthKey(localDateKey()));
   const [selectedDate, setSelectedDate] = useState(localDateKey());
-  const [data, setData] = useState<DashboardData>({ slots: [], appointments: [], blocks: [] });
+  const [data, setData] = useState<DashboardData>({ slots: [], monthAppointments: [], blocks: [] });
   const [loading, setLoading] = useState(true);
+  const [list, setList] = useState<AppointmentList>({ items: [], total: 0 });
+  const [listLoading, setListLoading] = useState(true);
+  const [listMoreBusy, setListMoreBusy] = useState(false);
   const [busySlots, setBusySlots] = useState<Set<number>>(new Set());
   const [use24Hour, setUse24Hour] = useState(true);
   const [filter, setFilter] = useState<AppointmentStatus | ''>('');
@@ -141,25 +151,59 @@ function AdminDashboard({ csrf, onExpired }: { csrf: string; onExpired: () => vo
     try {
       const from = encodeURIComponent(new Date(range.from).toISOString());
       const to = encodeURIComponent(new Date(range.to).toISOString());
+      const service = encodeURIComponent(serviceId);
       const [slotResult, appointmentResult, blockResult] = await Promise.all([
-        api<{ slots: AdminSlot[] }>(`/api/admin/availability-slots?service=${encodeURIComponent(serviceId)}&from=${from}&to=${to}`),
-        api<{ appointments: Appointment[] }>('/api/admin/appointments'),
+        api<{ slots: AdminSlot[] }>(`/api/admin/availability-slots?service=${service}&from=${from}&to=${to}`),
+        // Takvim, sayfalanmış listeden bağımsız olarak ayın tamamını çeker.
+        // Aksi halde kayıt sayısı sayfa sınırını aşınca dolu bir saat boş görünürdü.
+        api<{ appointments: Appointment[] }>(`/api/admin/appointments?service=${service}&from=${from}&to=${to}&limit=${CALENDAR_LIMIT}`),
         // Kapalı zamanlar da gezilen ayla aynı aralıktan gelir; aksi halde
         // takvim başka bir aya gittiğinde saatler yanlışlıkla açık görünür.
         api<{ blocks: AvailabilityBlock[] }>(`/api/admin/blocks?from=${from}&to=${to}`)
       ]);
-      setData({ slots: slotResult.slots, appointments: appointmentResult.appointments, blocks: blockResult.blocks });
+      setData({ slots: slotResult.slots, monthAppointments: appointmentResult.appointments, blocks: blockResult.blocks });
     } catch (err) { guard(err); }
     finally { setLoading(false); }
   }, [guard, month, serviceId]);
 
   useEffect(() => { loadData(); }, [loadData]);
 
+  /** Listeyi baştan yükler. `count` mevcut derinliği korumak için kullanılır. */
+  const loadAppointments = useCallback(async (count = PAGE_SIZE) => {
+    setListLoading(true);
+    try {
+      const query = new URLSearchParams({ limit: String(Math.min(count, CALENDAR_LIMIT)), offset: '0' });
+      if (filter) query.set('status', filter);
+      const result = await api<{ appointments: Appointment[]; total: number }>(`/api/admin/appointments?${query}`);
+      setList({ items: result.appointments, total: result.total });
+    } catch (err) { guard(err); }
+    finally { setListLoading(false); }
+  }, [filter, guard]);
+
+  // Filtre değiştiğinde liste ilk sayfadan yeniden yüklenir.
+  useEffect(() => { loadAppointments(); }, [loadAppointments]);
+
+  async function loadMoreAppointments() {
+    setListMoreBusy(true);
+    try {
+      const query = new URLSearchParams({ limit: String(PAGE_SIZE), offset: String(list.items.length) });
+      if (filter) query.set('status', filter);
+      const result = await api<{ appointments: Appointment[]; total: number }>(`/api/admin/appointments?${query}`);
+      setList(current => ({ items: [...current.items, ...result.appointments], total: result.total }));
+    } catch (err) { guard(err); }
+    finally { setListMoreBusy(false); }
+  }
+
+  /** Karar sonrası hem takvimi hem listeyi tazeler; liste derinliği korunur. */
+  const refreshAll = useCallback(async () => {
+    await Promise.all([loadData(), loadAppointments(Math.max(PAGE_SIZE, list.items.length))]);
+  }, [loadData, loadAppointments, list.items.length]);
+
   const openSet = useMemo(() => new Set(data.slots.map(slot => slot.start_at)), [data.slots]);
   const dateTones = useMemo(() => {
     const tones = new Map<string, 'open' | 'pending' | 'approved' | 'mixed'>();
     for (const slot of data.slots) tones.set(localDateKey(slot.start_at), 'open');
-    for (const appointment of data.appointments.filter(item => item.service_id === serviceId && ACTIVE_STATUSES.includes(item.status))) {
+    for (const appointment of data.monthAppointments.filter(item => ACTIVE_STATUSES.includes(item.status))) {
       const date = localDateKey(appointment.start_at);
       const next = appointment.status === 'PENDING' ? 'pending' : 'approved';
       const current = tones.get(date);
@@ -169,10 +213,9 @@ function AdminDashboard({ csrf, onExpired }: { csrf: string; onExpired: () => vo
   }, [data, serviceId]);
 
   const selectedService = services.find(service => service.id === serviceId);
-  const listedAppointments = data.appointments.filter(item => !filter || item.status === filter);
 
   function stateFor(start: number): { state: SlotState; appointment?: Appointment; block?: AvailabilityBlock } {
-    const appointment = data.appointments.find(item => item.service_id === serviceId && item.start_at === start && ACTIVE_STATUSES.includes(item.status));
+    const appointment = data.monthAppointments.find(item => item.start_at === start && ACTIVE_STATUSES.includes(item.status));
     if (appointment) return { state: appointment.status === 'APPROVED' ? 'approved' : 'pending', appointment };
     const end = start + 20 * 60_000;
     const block = data.blocks.find(item => item.start_at < end + 10 * 60_000 && item.end_at > start);
@@ -210,7 +253,7 @@ function AdminDashboard({ csrf, onExpired }: { csrf: string; onExpired: () => vo
       const message = decision.action === 'approve' ? 'Randevu onaylandı.' : decision.action === 'reject' ? 'Randevu talebi reddedildi.' : 'Randevu iptal edildi.';
       setDecision(null);
       notify(message);
-      await loadData();
+      await refreshAll();
     } catch (err) {
       if (err instanceof ApiError && err.status === 401) guard(err);
       else setDecisionError(err instanceof Error ? err.message : 'İşlem tamamlanamadı.');
@@ -273,7 +316,7 @@ function AdminDashboard({ csrf, onExpired }: { csrf: string; onExpired: () => vo
     <div className="admin-page">
       <header className="admin-header">
         <a className="brand" href="/">CEM<span>.</span>AVAT <small>Yönetim</small></a>
-        <div><button type="button" onClick={loadData}><RefreshCw size={16} /> Yenile</button><button type="button" onClick={logout}><LogOut size={16} /> Çıkış</button></div>
+        <div><button type="button" onClick={refreshAll}><RefreshCw size={16} /> Yenile</button><button type="button" onClick={logout}><LogOut size={16} /> Çıkış</button></div>
       </header>
       <main className="admin-content">
         <div className="admin-title"><div><span className="eyebrow">Müsaitlik planı</span><h1>Takvim</h1><p>Branşı, günü ve saati seçerek randevuya açın veya kapatın.</p></div><div className="legend"><span className="open">Açık</span><span className="pending">Bekliyor</span><span className="approved">Onaylı</span></div></div>
@@ -331,16 +374,28 @@ function AdminDashboard({ csrf, onExpired }: { csrf: string; onExpired: () => vo
         <section className="appointment-section">
           <header><div><span className="eyebrow">Randevular</span><h2>Talep ve onaylar</h2></div><div className="filter-tabs">{filters.map(value => <button type="button" key={value || 'all'} className={filter === value ? 'active' : ''} onClick={() => setFilter(value)}>{value ? statusLabels[value] : 'Tümü'}</button>)}</div></header>
           <div className="appointment-list">
-            {!listedAppointments.length && <div className="panel-state">Bu filtrede randevu bulunmuyor.</div>}
-            {listedAppointments.map(item => <AppointmentCard key={item.id} appointment={item} onDecide={openDecision} />)}
+            {listLoading && <div className="panel-state"><LoaderCircle className="spin" /> Randevular yükleniyor…</div>}
+            {!listLoading && !list.items.length && <div className="panel-state">Bu filtrede randevu bulunmuyor.</div>}
+            {!listLoading && list.items.map(item => <AppointmentCard key={item.id} appointment={item} onDecide={openDecision} />)}
           </div>
+          {!listLoading && list.total > 0 && (
+            <footer className="appointment-footer">
+              <span>{list.items.length} / {list.total} randevu gösteriliyor</span>
+              {list.items.length < list.total && (
+                <button type="button" disabled={listMoreBusy} onClick={loadMoreAppointments}>
+                  {listMoreBusy
+                    ? <><LoaderCircle className="spin" size={15} /> Yükleniyor…</>
+                    : <><ChevronDown size={15} /> Daha fazla yükle</>}
+                </button>
+              )}
+            </footer>
+          )}
         </section>
       </main>
       {decision && <DecisionModal decision={decision} busy={decisionBusy} error={decisionError} onClose={() => { if (!decisionBusy) setDecision(null); }} onConfirm={decide} />}
       {blockDraft && (
         <BlockModal
           initial={blockDraft}
-          appointments={data.appointments}
           busy={blockBusy}
           error={blockError}
           use24Hour={use24Hour}
@@ -431,9 +486,8 @@ function BlockSection({ blocks, month, loading, use24Hour, onAdd, onRemove }: {
   );
 }
 
-function BlockModal({ initial, appointments, busy, error, use24Hour, onClose, onConfirm }: {
+function BlockModal({ initial, busy, error, use24Hour, onClose, onConfirm }: {
   initial: BlockDraft;
-  appointments: Appointment[];
   busy: boolean;
   error: string;
   use24Hour: boolean;
@@ -441,6 +495,7 @@ function BlockModal({ initial, appointments, busy, error, use24Hour, onClose, on
   onConfirm: (draft: BlockDraft) => void;
 }) {
   const [draft, setDraft] = useState(initial);
+  const [clashCount, setClashCount] = useState(0);
   const dialogRef = useModalShell(busy, onClose);
   const update = (patch: Partial<BlockDraft>) => setDraft(current => ({ ...current, ...patch }));
 
@@ -448,11 +503,33 @@ function BlockModal({ initial, appointments, busy, error, use24Hour, onClose, on
   const localError = validateDraft(draft);
   const valid = !localError;
 
-  // Kapalı zaman eklemek mevcut randevuları iptal etmez; çakışanları önceden göster.
-  const clashing = valid
-    ? appointments.filter(item =>
-        ACTIVE_STATUSES.includes(item.status) && item.start_at < endAt && item.end_at > startAt)
-    : [];
+  // Kapalı zaman eklemek mevcut randevuları iptal etmez, bu yüzden çakışanları önceden gösteririz.
+  // Sayım seçilen aralığın tamamı için sunucudan gelir: aralık gezilen ayın dışına
+  // taşabildiği için takvim verisiyle sayılsaydı eksik çıkardı.
+  const firstCheck = useRef(true);
+  useEffect(() => {
+    if (!valid) { setClashCount(0); return; }
+    let cancelled = false;
+    // İlk kontrol beklemeden yapılır: modal açılırken uyarının sonradan belirip
+    // alttaki butonları aşağı itmesini önler. Sonraki düzenlemeler geciktirilir.
+    const delay = firstCheck.current ? 0 : 250;
+    firstCheck.current = false;
+    const timer = window.setTimeout(async () => {
+      const query = new URLSearchParams({
+        from: new Date(startAt).toISOString(),
+        to: new Date(endAt).toISOString(),
+        limit: String(CALENDAR_LIMIT)
+      });
+      try {
+        const result = await api<{ appointments: Appointment[] }>(`/api/admin/appointments?${query}`);
+        if (!cancelled) setClashCount(result.appointments.filter(item => ACTIVE_STATUSES.includes(item.status)).length);
+      } catch {
+        // Uyarı tamamlayıcıdır; sorgulanamazsa asıl akış engellenmez.
+        if (!cancelled) setClashCount(0);
+      }
+    }, delay);
+    return () => { cancelled = true; window.clearTimeout(timer); };
+  }, [valid, startAt, endAt]);
 
   return (
     <div className="decision-backdrop" onMouseDown={event => { if (event.target === event.currentTarget && !busy) onClose(); }}>
@@ -499,11 +576,11 @@ function BlockModal({ initial, appointments, busy, error, use24Hour, onClose, on
           <small>{draft.reason.length} / 200</small>
         </label>
 
-        {clashing.length > 0 && (
+        {clashCount > 0 && (
           <div className="block-warning">
             <TriangleAlert size={16} />
             <div>
-              <strong>Bu aralıkta {clashing.length} aktif randevu var.</strong>
+              <strong>Bu aralıkta {clashCount} aktif randevu var.</strong>
               <p>Kapalı zaman eklemek onları iptal etmez; gerekirse randevular listesinden ayrıca iptal edin.</p>
             </div>
           </div>

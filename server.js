@@ -78,7 +78,23 @@ export function createApp({ config = loadConfig(), database = null, emailService
       const allowedStatuses = ['', 'PENDING', 'APPROVED', 'REJECTED', 'EXPIRED', 'CANCELLED', 'CONFLICT'];
       const status = String(req.query.status || '').toUpperCase();
       if (!allowedStatuses.includes(status)) throw validationError('Geçersiz durum filtresi.');
-      res.json({ appointments: db.listAppointments({ status, limit: 200 }) });
+
+      const serviceId = String(req.query.service || '');
+      if (serviceId) assertService(serviceId);
+
+      let from = 0;
+      let to = 0;
+      if (req.query.from || req.query.to) {
+        from = parseTimestamp(req.query.from, 'Başlangıç');
+        to = parseTimestamp(req.query.to, 'Bitiş');
+        if (to <= from || to - from > 366 * 86400000) throw validationError('Randevu aralığı geçerli değil.');
+      }
+
+      const limit = parseCount(req.query.limit, 200, 1, 500, 'Kayıt sayısı');
+      const offset = parseCount(req.query.offset, 0, 0, 100000, 'Başlangıç konumu');
+
+      const { appointments, total } = db.listAppointments({ status, serviceId, from, to, limit, offset });
+      res.json({ appointments, total });
     } catch (error) { next(error); }
   });
 
@@ -326,6 +342,13 @@ function parseCookies(header) {
     const index = part.indexOf('=');
     return [decodeURIComponent(part.slice(0, index)), decodeURIComponent(part.slice(index + 1))];
   }));
+}
+
+function parseCount(value, fallback, min, max, label) {
+  if (value === undefined || value === '') return fallback;
+  const count = Number(value);
+  if (!Number.isInteger(count) || count < min || count > max) throw validationError(`${label} geçerli değil.`);
+  return count;
 }
 
 function parseTimestamp(value, label) {

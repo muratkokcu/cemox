@@ -124,12 +124,29 @@ export function createDatabase(databasePath) {
     return sqlite.prepare('SELECT * FROM appointments WHERE id = ?').get(id);
   }
 
-  function listAppointments({ status = '', limit = 100, offset = 0 } = {}) {
+  /**
+   * Randevuları filtreler ve sayfalar. `total` filtreye uyan tüm kayıtların sayısıdır;
+   * istemci "daha fazla var mı" bilgisini buradan alır.
+   * `from`/`to` verildiğinde aralıkla kesişen kayıtlar döner (takvim görünümü bunu kullanır).
+   */
+  function listAppointments({ status = '', serviceId = '', from = 0, to = 0, limit = 100, offset = 0 } = {}) {
     expirePending();
-    if (status) {
-      return sqlite.prepare('SELECT * FROM appointments WHERE status = ? ORDER BY start_at ASC LIMIT ? OFFSET ?').all(status, limit, offset);
-    }
-    return sqlite.prepare('SELECT * FROM appointments ORDER BY CASE status WHEN \'PENDING\' THEN 0 ELSE 1 END, start_at ASC LIMIT ? OFFSET ?').all(limit, offset);
+    const clauses = [];
+    const filters = [];
+    if (status) { clauses.push('status = ?'); filters.push(status); }
+    if (serviceId) { clauses.push('service_id = ?'); filters.push(serviceId); }
+    if (to > from) { clauses.push('start_at < ? AND end_at > ?'); filters.push(to, from); }
+    const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
+    // Durum filtresi yokken bekleyenler başa alınır; `id` sayfalar arası kararlılık için.
+    const order = status
+      ? 'start_at ASC, id ASC'
+      : "CASE status WHEN 'PENDING' THEN 0 ELSE 1 END, start_at ASC, id ASC";
+
+    const total = sqlite.prepare(`SELECT COUNT(*) AS total FROM appointments ${where}`).get(...filters).total;
+    const appointments = sqlite
+      .prepare(`SELECT * FROM appointments ${where} ORDER BY ${order} LIMIT ? OFFSET ?`)
+      .all(...filters, limit, offset);
+    return { appointments, total };
   }
 
   function decideAppointment(id, action, adminNote = '', now = Date.now()) {

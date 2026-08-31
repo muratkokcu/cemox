@@ -12,6 +12,8 @@ use serde_json::Value;
 
 pub struct TestServer {
     pub base_url: String,
+    /// Testlerin HTTP'yi atlayarak veri hazırlaması için.
+    pub db: Db,
     pub client: reqwest::Client,
     server: tokio::task::JoinHandle<()>,
 }
@@ -81,7 +83,7 @@ pub async fn start() -> TestServer {
     let db = Db::new(":memory:").expect("veritabanı açılamadı");
     seed_availability(&db);
 
-    let state = AppState::new(config, db, EmailService::disabled());
+    let state = AppState::new(config, db.clone(), EmailService::disabled());
     let router = build_router(state);
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
@@ -98,6 +100,7 @@ pub async fn start() -> TestServer {
 
     TestServer {
         base_url: format!("http://127.0.0.1:{port}"),
+        db,
         client: reqwest::Client::new(),
         server,
     }

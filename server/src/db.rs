@@ -102,6 +102,22 @@ pub struct BusyRange {
     pub is_appointment: bool,
 }
 
+/// `list_appointments` filtreleri. Boş alanlar o koşulu tamamen atlar.
+#[derive(Debug, Default, Clone)]
+pub struct AppointmentQuery {
+    pub status: String,
+    pub service_id: String,
+    pub from: i64,
+    pub to: i64,
+    pub limit: i64,
+    pub offset: i64,
+}
+
+pub struct AppointmentPage {
+    pub appointments: Vec<Appointment>,
+    pub total: i64,
+}
+
 pub struct NewAppointment {
     pub service_id: String,
     pub service_name: String,
@@ -237,32 +253,63 @@ impl Db {
         get_appointment_conn(&conn, id)
     }
 
-    pub fn list_appointments(
-        &self,
-        status: &str,
-        limit: i64,
-        offset: i64,
-    ) -> Result<Vec<Appointment>, AppError> {
+    /// Randevuları filtreler ve sayfalar. `total` filtreye uyan tüm kayıtların sayısıdır;
+    /// istemci "daha fazla var mı" bilgisini buradan alır.
+    /// `from`/`to` verildiğinde aralıkla kesişen kayıtlar döner (takvim görünümü bunu kullanır).
+    pub fn list_appointments(&self, query: &AppointmentQuery) -> Result<AppointmentPage, AppError> {
         let conn = self.conn()?;
         expire_pending_conn(&conn, now_ms())?;
-        if status.is_empty() {
-            // PENDING kayıtlar listenin başında kalır.
-            let sql = format!(
-                "SELECT {APPOINTMENT_COLUMNS} FROM appointments \
-                 ORDER BY CASE status WHEN 'PENDING' THEN 0 ELSE 1 END, start_at ASC LIMIT ? OFFSET ?"
-            );
-            let mut statement = conn.prepare(&sql)?;
-            let rows = statement.query_map(params![limit, offset], map_appointment)?;
-            Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
-        } else {
-            let sql = format!(
-                "SELECT {APPOINTMENT_COLUMNS} FROM appointments WHERE status = ? \
-                 ORDER BY start_at ASC LIMIT ? OFFSET ?"
-            );
-            let mut statement = conn.prepare(&sql)?;
-            let rows = statement.query_map(params![status, limit, offset], map_appointment)?;
-            Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+
+        let mut clauses: Vec<&str> = Vec::new();
+        let mut filters: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
+        if !query.status.is_empty() {
+            clauses.push("status = ?");
+            filters.push(Box::new(query.status.clone()));
         }
+        if !query.service_id.is_empty() {
+            clauses.push("service_id = ?");
+            filters.push(Box::new(query.service_id.clone()));
+        }
+        if query.to > query.from {
+            clauses.push("start_at < ? AND end_at > ?");
+            filters.push(Box::new(query.to));
+            filters.push(Box::new(query.from));
+        }
+        let where_clause = if clauses.is_empty() {
+            String::new()
+        } else {
+            format!("WHERE {}", clauses.join(" AND "))
+        };
+        // Durum filtresi yokken bekleyenler başa alınır; `id` sayfalar arası kararlılık için.
+        let order = if query.status.is_empty() {
+            "CASE status WHEN 'PENDING' THEN 0 ELSE 1 END, start_at ASC, id ASC"
+        } else {
+            "start_at ASC, id ASC"
+        };
+
+        let filter_refs: Vec<&dyn rusqlite::ToSql> =
+            filters.iter().map(|value| value.as_ref()).collect();
+        let total: i64 = conn.query_row(
+            &format!("SELECT COUNT(*) FROM appointments {where_clause}"),
+            filter_refs.as_slice(),
+            |row| row.get(0),
+        )?;
+
+        let mut paged = filter_refs.clone();
+        paged.push(&query.limit);
+        paged.push(&query.offset);
+        let sql = format!(
+            "SELECT {APPOINTMENT_COLUMNS} FROM appointments {where_clause} ORDER BY {order} LIMIT ? OFFSET ?"
+        );
+        let mut statement = conn.prepare(&sql)?;
+        let appointments = statement
+            .query_map(paged.as_slice(), map_appointment)?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+
+        Ok(AppointmentPage {
+            appointments,
+            total,
+        })
     }
 
     pub fn get_busy_ranges(

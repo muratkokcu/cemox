@@ -347,3 +347,160 @@ async fn admin_blocks_can_be_listed_for_an_arbitrary_range() {
     assert_eq!(empty.status, 200);
     assert_eq!(empty.body["blocks"].as_array().unwrap().len(), 0);
 }
+
+#[tokio::test]
+async fn admin_appointments_are_filtered_and_paginated_server_side() {
+    let server = common::start().await;
+    let (cookie, _csrf) = server.login().await;
+    let read = [("Cookie", cookie.as_str())];
+
+    // Sayfa sınırını aşacak kadar kayıt üret. Doğrudan veritabanına yazılır:
+    // HTTP üzerinden kişi başına tek bekleyen talep kuralı buna izin vermez.
+    let now = now_ms();
+    for index in 0..60i64 {
+        let start_at = now + (2 + index) * 86_400_000;
+        server
+            .db
+            .create_appointment(
+                &NewAppointment {
+                    service_id: if index % 2 == 0 {
+                        "medical-fitness".into()
+                    } else {
+                        "kisisel-antrenman".into()
+                    },
+                    service_name: "Test".into(),
+                    start_at,
+                    end_at: start_at + BOOKING_RULES.slot_ms(),
+                    name: format!("Kayıt {index}"),
+                    email: format!("kayit{index}@example.com"),
+                    phone: format!("+90555000{index:04}"),
+                    note: String::new(),
+                },
+                now,
+            )
+            .expect("randevu eklenemedi");
+    }
+
+    // Toplam sayı sayfa boyutundan bağımsızdır.
+    let first = server
+        .request(
+            Method::GET,
+            "/api/admin/appointments?limit=25&offset=0",
+            &read,
+            None,
+        )
+        .await;
+    assert_eq!(first.status, 200);
+    assert_eq!(first.body["appointments"].as_array().unwrap().len(), 25);
+    assert_eq!(first.body["total"], 60);
+
+    // Sayfalar örtüşmez ve sıralama kararlıdır.
+    let second = server
+        .request(
+            Method::GET,
+            "/api/admin/appointments?limit=25&offset=25",
+            &read,
+            None,
+        )
+        .await;
+    let ids = |response: &Value| -> Vec<String> {
+        response["appointments"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|item| item["id"].as_str().unwrap().to_string())
+            .collect()
+    };
+    let page_one = ids(&first.body);
+    let page_two = ids(&second.body);
+    assert!(
+        page_one.iter().all(|id| !page_two.contains(id)),
+        "sayfalar örtüşmemeli"
+    );
+
+    let repeat = server
+        .request(
+            Method::GET,
+            "/api/admin/appointments?limit=25&offset=25",
+            &read,
+            None,
+        )
+        .await;
+    assert_eq!(
+        ids(&repeat.body),
+        page_two,
+        "aynı sayfa aynı sırayla dönmeli"
+    );
+
+    // Branş filtresi.
+    let by_service = server
+        .request(
+            Method::GET,
+            "/api/admin/appointments?service=medical-fitness&limit=100",
+            &read,
+            None,
+        )
+        .await;
+    assert_eq!(by_service.body["total"], 30);
+    assert!(
+        by_service.body["appointments"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|item| item["service_id"] == "medical-fitness")
+    );
+
+    // Tarih aralığı filtresi: takvim görünümünün kullandığı sorgu.
+    let ranged = server
+        .request(
+            Method::GET,
+            &format!(
+                "/api/admin/appointments?from={}&to={}&limit=500",
+                to_iso_string(now),
+                to_iso_string(now + 12 * 86_400_000)
+            ),
+            &read,
+            None,
+        )
+        .await;
+    assert_eq!(ranged.status, 200, "{:?}", ranged.body);
+    // 2..=11 gün sonrasındaki 10 kayıt aralığa girer.
+    assert_eq!(ranged.body["total"], 10);
+
+    // Geçersiz parametreler.
+    for (query, message) in [
+        ("?limit=0", "Kayıt sayısı geçerli değil."),
+        ("?limit=501", "Kayıt sayısı geçerli değil."),
+        ("?limit=abc", "Kayıt sayısı geçerli değil."),
+        ("?offset=-1", "Başlangıç konumu geçerli değil."),
+        ("?service=yok", "Geçerli bir hizmet seçin."),
+        ("?from=2026-01-01T00:00:00.000Z", "Bitiş geçerli değil."),
+        (
+            "?from=2026-02-01T00:00:00.000Z&to=2026-01-01T00:00:00.000Z",
+            "Randevu aralığı geçerli değil.",
+        ),
+    ] {
+        let response = server
+            .request(
+                Method::GET,
+                &format!("/api/admin/appointments{query}"),
+                &read,
+                None,
+            )
+            .await;
+        assert_eq!(response.status, 400, "{query}: {:?}", response.body);
+        assert_eq!(response.body["error"]["message"], message, "{query}");
+    }
+
+    // Boş parametreler varsayılana düşer.
+    let empty = server
+        .request(
+            Method::GET,
+            "/api/admin/appointments?limit=&offset=&status=&service=&from=&to=",
+            &read,
+            None,
+        )
+        .await;
+    assert_eq!(empty.status, 200);
+    assert_eq!(empty.body["total"], 60);
+}

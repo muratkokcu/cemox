@@ -8,10 +8,16 @@
     "dev": "concurrently -k -n api,web -c green,cyan \"npm:dev:api\" \"npm:dev:web\"",
     "dev:api": "node --watch server.js",
     "dev:web": "vite",
+    "dev:rust": "concurrently -k -n rust,web -c magenta,cyan \"npm:dev:rs\" \"npm:dev:web\"",
+    "dev:rs": "cargo run --manifest-path server/Cargo.toml",
     "build": "tsc -b && vite build",
+    "build:rs": "cargo build --release --manifest-path server/Cargo.toml",
     "start": "node server.js",
+    "start:rs": "./server/target/release/cemox-server",
     "test": "node --test",
-    "check": "tsc -b && node --check server.js && node --check src/config.js && node --check src/db.js && node --check src/email.js && node scripts/check.mjs"
+    "test:rs": "cargo test --manifest-path server/Cargo.toml",
+    "check": "tsc -b && node --check server.js && node --check src/config.js && node --check src/db.js && node --check src/email.js && node scripts/check.mjs",
+    "check:rs": "cargo fmt --manifest-path server/Cargo.toml --check && cargo clippy --manifest-path server/Cargo.toml --all-targets -- -D warnings"
   },
   "engines": {
     "node": ">=24"

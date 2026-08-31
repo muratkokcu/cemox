@@ -12,3 +12,6 @@ dist/
 .env
 data/
 npm-debug.log*
+
+# Rust backend
+server/target/

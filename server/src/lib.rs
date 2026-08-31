@@ -1,0 +1,8 @@
+//! Cemox randevu API'si. Bütünleşik testler bu kütüphane hedefini kullanır.
+
+pub mod app;
+pub mod config;
+pub mod db;
+pub mod email;
+pub mod error;
+pub mod time;

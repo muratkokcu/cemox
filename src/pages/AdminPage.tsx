@@ -1,14 +1,47 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Ban, CalendarClock, Check, CircleCheck, CircleX, LoaderCircle, LogOut, RefreshCw, ShieldCheck, X } from 'lucide-react';
+import { Ban, CalendarClock, CalendarOff, Check, CircleCheck, CircleX, LoaderCircle, LogOut, Plus, RefreshCw, ShieldCheck, Trash2, TriangleAlert, X } from 'lucide-react';
 import { MonthCalendar } from '../components/MonthCalendar';
 import { TimeFormatToggle } from '../components/TimeFormatToggle';
 import { api, ApiError } from '../web/api';
-import { addMonths, formatDateTime, formatSelectedDate, formatTime, localDateKey, monthKey, monthRange, timeOptions, toTimestamp } from '../web/date';
+import { addDays, addMonths, DAY_MS, formatBlockRange, formatDateTime, formatMonth, formatSelectedDate, formatTime, localDateKey, monthKey, monthRange, timeOptions, toTimestamp } from '../web/date';
 import type { AdminSlot, Appointment, AppointmentStatus, AvailabilityBlock, Service } from '../web/types';
 
 type DashboardData = { slots: AdminSlot[]; appointments: Appointment[]; blocks: AvailabilityBlock[] };
 type SlotState = 'open' | 'closed' | 'pending' | 'approved' | 'blocked' | 'past';
 type DecisionAction = 'approve' | 'reject' | 'cancel';
+type BlockDraft = {
+  startDate: string; startTime: string;
+  endDate: string; endTime: string;
+  allDay: boolean; reason: string;
+};
+
+const ACTIVE_STATUSES: AppointmentStatus[] = ['PENDING', 'APPROVED'];
+
+/**
+ * Taslaktan gerçek zaman aralığını üretir. Kapalı zamanın bitişi dışlayıcı olduğu için
+ * "tüm gün" modunda seçilen son gün de kapansın diye bitiş ertesi güne taşınır.
+ */
+function draftRange(draft: BlockDraft): { startAt: number; endAt: number } {
+  if (draft.allDay) {
+    return {
+      startAt: toTimestamp(draft.startDate, '00:00'),
+      endAt: toTimestamp(addDays(draft.endDate, 1), '00:00')
+    };
+  }
+  return {
+    startAt: toTimestamp(draft.startDate, draft.startTime),
+    endAt: toTimestamp(draft.endDate, draft.endTime)
+  };
+}
+
+/** Sunucudaki doğrulamanın aynısı; kullanıcı hatayı istek göndermeden görür. */
+function validateDraft(draft: BlockDraft): string {
+  const { startAt, endAt } = draftRange(draft);
+  if (!Number.isFinite(startAt) || !Number.isFinite(endAt)) return 'Geçerli bir tarih ve saat seçin.';
+  if (endAt <= startAt) return 'Bitiş zamanı başlangıçtan sonra olmalıdır.';
+  if (endAt - startAt > 31 * DAY_MS) return 'Tek bir kapalı zaman 31 günden uzun olamaz.';
+  return '';
+}
 
 const statusLabels: Record<AppointmentStatus, string> = {
   PENDING: 'Onay bekliyor', APPROVED: 'Onaylandı', REJECTED: 'Reddedildi', EXPIRED: 'Süresi doldu', CANCELLED: 'İptal', CONFLICT: 'Çakışma'
@@ -79,6 +112,15 @@ function AdminDashboard({ csrf, onExpired }: { csrf: string; onExpired: () => vo
   const [decision, setDecision] = useState<{ appointment: Appointment; action: DecisionAction } | null>(null);
   const [decisionBusy, setDecisionBusy] = useState(false);
   const [decisionError, setDecisionError] = useState('');
+  const [blockDraft, setBlockDraft] = useState<BlockDraft | null>(null);
+  const [removingBlock, setRemovingBlock] = useState<AvailabilityBlock | null>(null);
+  const [blockBusy, setBlockBusy] = useState(false);
+  const [blockError, setBlockError] = useState('');
+
+  const notify = useCallback((message: string) => {
+    setToast(message);
+    window.setTimeout(() => setToast(''), 2400);
+  }, []);
 
   const guard = useCallback((err: unknown) => {
     if (err instanceof ApiError && err.status === 401) { onExpired(); return true; }
@@ -97,10 +139,14 @@ function AdminDashboard({ csrf, onExpired }: { csrf: string; onExpired: () => vo
     setLoading(true); setError('');
     const range = monthRange(`${month}-01`);
     try {
+      const from = encodeURIComponent(new Date(range.from).toISOString());
+      const to = encodeURIComponent(new Date(range.to).toISOString());
       const [slotResult, appointmentResult, blockResult] = await Promise.all([
-        api<{ slots: AdminSlot[] }>(`/api/admin/availability-slots?service=${encodeURIComponent(serviceId)}&from=${encodeURIComponent(new Date(range.from).toISOString())}&to=${encodeURIComponent(new Date(range.to).toISOString())}`),
+        api<{ slots: AdminSlot[] }>(`/api/admin/availability-slots?service=${encodeURIComponent(serviceId)}&from=${from}&to=${to}`),
         api<{ appointments: Appointment[] }>('/api/admin/appointments'),
-        api<{ blocks: AvailabilityBlock[] }>('/api/admin/blocks')
+        // Kapalı zamanlar da gezilen ayla aynı aralıktan gelir; aksi halde
+        // takvim başka bir aya gittiğinde saatler yanlışlıkla açık görünür.
+        api<{ blocks: AvailabilityBlock[] }>(`/api/admin/blocks?from=${from}&to=${to}`)
       ]);
       setData({ slots: slotResult.slots, appointments: appointmentResult.appointments, blocks: blockResult.blocks });
     } catch (err) { guard(err); }
@@ -113,7 +159,7 @@ function AdminDashboard({ csrf, onExpired }: { csrf: string; onExpired: () => vo
   const dateTones = useMemo(() => {
     const tones = new Map<string, 'open' | 'pending' | 'approved' | 'mixed'>();
     for (const slot of data.slots) tones.set(localDateKey(slot.start_at), 'open');
-    for (const appointment of data.appointments.filter(item => item.service_id === serviceId && ['PENDING', 'APPROVED'].includes(item.status))) {
+    for (const appointment of data.appointments.filter(item => item.service_id === serviceId && ACTIVE_STATUSES.includes(item.status))) {
       const date = localDateKey(appointment.start_at);
       const next = appointment.status === 'PENDING' ? 'pending' : 'approved';
       const current = tones.get(date);
@@ -126,7 +172,7 @@ function AdminDashboard({ csrf, onExpired }: { csrf: string; onExpired: () => vo
   const listedAppointments = data.appointments.filter(item => !filter || item.status === filter);
 
   function stateFor(start: number): { state: SlotState; appointment?: Appointment; block?: AvailabilityBlock } {
-    const appointment = data.appointments.find(item => item.service_id === serviceId && item.start_at === start && ['PENDING', 'APPROVED'].includes(item.status));
+    const appointment = data.appointments.find(item => item.service_id === serviceId && item.start_at === start && ACTIVE_STATUSES.includes(item.status));
     if (appointment) return { state: appointment.status === 'APPROVED' ? 'approved' : 'pending', appointment };
     const end = start + 20 * 60_000;
     const block = data.blocks.find(item => item.start_at < end + 10 * 60_000 && item.end_at > start);
@@ -142,8 +188,7 @@ function AdminDashboard({ csrf, onExpired }: { csrf: string; onExpired: () => vo
       await api('/api/admin/availability-slots', {
         method: 'PUT', body: JSON.stringify({ serviceId, start: new Date(start).toISOString(), open })
       }, csrf);
-      setToast(open ? 'Saat randevuya açıldı.' : 'Saat kapatıldı.');
-      window.setTimeout(() => setToast(''), 2400);
+      notify(open ? 'Saat randevuya açıldı.' : 'Saat kapatıldı.');
       await loadData();
     } catch (err) { guard(err); }
     finally { setBusySlots(current => { const next = new Set(current); next.delete(start); return next; }); }
@@ -164,13 +209,59 @@ function AdminDashboard({ csrf, onExpired }: { csrf: string; onExpired: () => vo
       }, csrf);
       const message = decision.action === 'approve' ? 'Randevu onaylandı.' : decision.action === 'reject' ? 'Randevu talebi reddedildi.' : 'Randevu iptal edildi.';
       setDecision(null);
-      setToast(message);
-      window.setTimeout(() => setToast(''), 2400);
+      notify(message);
       await loadData();
     } catch (err) {
       if (err instanceof ApiError && err.status === 401) guard(err);
       else setDecisionError(err instanceof Error ? err.message : 'İşlem tamamlanamadı.');
     } finally { setDecisionBusy(false); }
+  }
+
+  /** Modalı seçili günden yola çıkarak tüm gün kapalı olacak şekilde açar. */
+  function openBlockDraft() {
+    setBlockError('');
+    setBlockDraft({
+      startDate: selectedDate, startTime: '09:00',
+      endDate: selectedDate, endTime: '18:00',
+      allDay: true, reason: ''
+    });
+  }
+
+  async function createBlock(draft: BlockDraft) {
+    const { startAt, endAt } = draftRange(draft);
+    setBlockBusy(true); setBlockError('');
+    try {
+      await api('/api/admin/blocks', {
+        method: 'POST',
+        body: JSON.stringify({
+          start: new Date(startAt).toISOString(),
+          end: new Date(endAt).toISOString(),
+          reason: draft.reason.trim()
+        })
+      }, csrf);
+      setBlockDraft(null);
+      notify('Kapalı zaman eklendi.');
+      // Blok başka bir aya düştüyse takvimi oraya taşı, aksi halde kayıt görünmez.
+      const targetMonth = monthKey(localDateKey(startAt));
+      if (targetMonth !== month) { setMonth(targetMonth); setSelectedDate(localDateKey(startAt)); }
+      else await loadData();
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 401) guard(err);
+      else setBlockError(err instanceof Error ? err.message : 'Kapalı zaman eklenemedi.');
+    } finally { setBlockBusy(false); }
+  }
+
+  async function removeBlock(block: AvailabilityBlock) {
+    setBlockBusy(true); setBlockError('');
+    try {
+      await api(`/api/admin/blocks/${encodeURIComponent(block.id)}`, { method: 'DELETE' }, csrf);
+      setRemovingBlock(null);
+      notify('Kapalı zaman kaldırıldı.');
+      await loadData();
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 401) guard(err);
+      else setBlockError(err instanceof Error ? err.message : 'Kapalı zaman kaldırılamadı.');
+    } finally { setBlockBusy(false); }
   }
 
   async function logout() {
@@ -228,6 +319,15 @@ function AdminDashboard({ csrf, onExpired }: { csrf: string; onExpired: () => vo
           </section>
         </div>
 
+        <BlockSection
+          blocks={data.blocks}
+          month={month}
+          loading={loading}
+          use24Hour={use24Hour}
+          onAdd={openBlockDraft}
+          onRemove={block => { setBlockError(''); setRemovingBlock(block); }}
+        />
+
         <section className="appointment-section">
           <header><div><span className="eyebrow">Randevular</span><h2>Talep ve onaylar</h2></div><div className="filter-tabs">{filters.map(value => <button type="button" key={value || 'all'} className={filter === value ? 'active' : ''} onClick={() => setFilter(value)}>{value ? statusLabels[value] : 'Tümü'}</button>)}</div></header>
           <div className="appointment-list">
@@ -237,7 +337,28 @@ function AdminDashboard({ csrf, onExpired }: { csrf: string; onExpired: () => vo
         </section>
       </main>
       {decision && <DecisionModal decision={decision} busy={decisionBusy} error={decisionError} onClose={() => { if (!decisionBusy) setDecision(null); }} onConfirm={decide} />}
-      {toast && <div className="toast"><Check size={17} /> {toast}</div>}
+      {blockDraft && (
+        <BlockModal
+          initial={blockDraft}
+          appointments={data.appointments}
+          busy={blockBusy}
+          error={blockError}
+          use24Hour={use24Hour}
+          onClose={() => { if (!blockBusy) setBlockDraft(null); }}
+          onConfirm={createBlock}
+        />
+      )}
+      {removingBlock && (
+        <BlockRemoveModal
+          block={removingBlock}
+          busy={blockBusy}
+          error={blockError}
+          use24Hour={use24Hour}
+          onClose={() => { if (!blockBusy) setRemovingBlock(null); }}
+          onConfirm={() => removeBlock(removingBlock)}
+        />
+      )}
+      {toast && <div className="toast" role="status"><Check size={17} /> {toast}</div>}
     </div>
   );
 }
@@ -257,23 +378,9 @@ function AppointmentCard({ appointment, onDecide }: { appointment: Appointment; 
   );
 }
 
-function DecisionModal({ decision, busy, error, onClose, onConfirm }: {
-  decision: { appointment: Appointment; action: DecisionAction };
-  busy: boolean;
-  error: string;
-  onClose: () => void;
-  onConfirm: (adminNote: string) => void;
-}) {
-  const [adminNote, setAdminNote] = useState('');
+/** Modal açıkken sayfa kaydırmasını kilitler, Escape ile kapanmayı bağlar ve odağı alır. */
+function useModalShell(busy: boolean, onClose: () => void) {
   const dialogRef = useRef<HTMLDivElement>(null);
-  const { appointment, action } = decision;
-  const config = {
-    approve: { eyebrow: 'Randevu onayı', title: 'Randevuyu onayla', description: 'Bu saat kesinleştirilecek ve danışana onay e-postası gönderilecek.', button: 'Randevuyu onayla', icon: CircleCheck },
-    reject: { eyebrow: 'Talep sonucu', title: 'Talebi reddet', description: 'Seçilen saat yeniden müsait olacak ve danışana bilgilendirme gönderilecek.', button: 'Talebi reddet', icon: CircleX },
-    cancel: { eyebrow: 'Randevu iptali', title: 'Randevuyu iptal et', description: 'Onaylanmış randevu iptal edilecek ve saat yeniden kullanılabilir olacak.', button: 'Randevuyu iptal et', icon: Ban }
-  }[action];
-  const Icon = config.icon;
-
   useEffect(() => {
     const previousOverflow = document.body.style.overflow;
     const closeOnEscape = (event: KeyboardEvent) => { if (event.key === 'Escape' && !busy) onClose(); };
@@ -282,6 +389,188 @@ function DecisionModal({ decision, busy, error, onClose, onConfirm }: {
     dialogRef.current?.focus();
     return () => { document.body.style.overflow = previousOverflow; document.removeEventListener('keydown', closeOnEscape); };
   }, [busy, onClose]);
+  return dialogRef;
+}
+
+function BlockSection({ blocks, month, loading, use24Hour, onAdd, onRemove }: {
+  blocks: AvailabilityBlock[];
+  month: string;
+  loading: boolean;
+  use24Hour: boolean;
+  onAdd: () => void;
+  onRemove: (block: AvailabilityBlock) => void;
+}) {
+  const ordered = [...blocks].sort((a, b) => a.start_at - b.start_at);
+  return (
+    <section className="block-section">
+      <header>
+        <div>
+          <span className="eyebrow">Kapalı zamanlar</span>
+          <h2>{formatMonth(month)}</h2>
+          <p>Bu aralıklar tüm branşlara kapalıdır ve açık saatlerin önüne geçer. Tatil, izin ve seyahat için kullanın.</p>
+        </div>
+        <button type="button" className="block-add" onClick={onAdd}><Plus size={15} /> Kapalı zaman ekle</button>
+      </header>
+      <div className="block-list">
+        {loading && <div className="panel-state"><LoaderCircle className="spin" /> Yükleniyor…</div>}
+        {!loading && !ordered.length && <div className="panel-state">Bu ayda kapalı zaman yok.</div>}
+        {!loading && ordered.map(block => (
+          <article className="block-card" key={block.id}>
+            <span className="block-icon"><CalendarOff /></span>
+            <div>
+              <strong>{formatBlockRange(block.start_at, block.end_at, use24Hour)}</strong>
+              <p>{block.reason || 'Açıklama girilmedi'}</p>
+            </div>
+            <button type="button" onClick={() => onRemove(block)}>
+              <Trash2 size={14} /> Kaldır
+            </button>
+          </article>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function BlockModal({ initial, appointments, busy, error, use24Hour, onClose, onConfirm }: {
+  initial: BlockDraft;
+  appointments: Appointment[];
+  busy: boolean;
+  error: string;
+  use24Hour: boolean;
+  onClose: () => void;
+  onConfirm: (draft: BlockDraft) => void;
+}) {
+  const [draft, setDraft] = useState(initial);
+  const dialogRef = useModalShell(busy, onClose);
+  const update = (patch: Partial<BlockDraft>) => setDraft(current => ({ ...current, ...patch }));
+
+  const { startAt, endAt } = draftRange(draft);
+  const localError = validateDraft(draft);
+  const valid = !localError;
+
+  // Kapalı zaman eklemek mevcut randevuları iptal etmez; çakışanları önceden göster.
+  const clashing = valid
+    ? appointments.filter(item =>
+        ACTIVE_STATUSES.includes(item.status) && item.start_at < endAt && item.end_at > startAt)
+    : [];
+
+  return (
+    <div className="decision-backdrop" onMouseDown={event => { if (event.target === event.currentTarget && !busy) onClose(); }}>
+      <div className="decision-modal block-modal" role="dialog" aria-modal="true" aria-labelledby="block-title" tabIndex={-1} ref={dialogRef}>
+        <header className="decision-header">
+          <span className="decision-icon"><CalendarOff /></span>
+          <div><span className="eyebrow">Müsaitlik istisnası</span><h2 id="block-title">Kapalı zaman ekle</h2></div>
+          <button type="button" className="decision-close" aria-label="Pencereyi kapat" disabled={busy} onClick={onClose}><X size={18} /></button>
+        </header>
+        <p className="decision-description">Seçilen aralıkta hiçbir branş randevuya açık olmaz; danışanlar bu saatleri göremez.</p>
+
+        <div className="block-fields">
+          <label className="block-allday">
+            <input type="checkbox" checked={draft.allDay} onChange={event => update({ allDay: event.target.checked })} />
+            <span>Tüm gün</span>
+          </label>
+          <label>Başlangıç
+            <input type="date" required value={draft.startDate} onChange={event => update({ startDate: event.target.value })} />
+          </label>
+          {!draft.allDay && (
+            <label>Saat
+              <input type="time" required step={1800} value={draft.startTime} onChange={event => update({ startTime: event.target.value })} />
+            </label>
+          )}
+          <label>{draft.allDay ? 'Son gün' : 'Bitiş'}
+            <input type="date" required value={draft.endDate} onChange={event => update({ endDate: event.target.value })} />
+          </label>
+          {!draft.allDay && (
+            <label>Saat
+              <input type="time" required step={1800} value={draft.endTime} onChange={event => update({ endTime: event.target.value })} />
+            </label>
+          )}
+        </div>
+
+        {valid && (
+          <div className="block-preview">
+            <CalendarClock />
+            <span>{formatBlockRange(startAt, endAt, use24Hour)}</span>
+          </div>
+        )}
+
+        <label className="decision-note">Açıklama <span>(isteğe bağlı)</span>
+          <textarea rows={2} maxLength={200} placeholder="Örn. yıllık izin, seminer, seyahat…" value={draft.reason} onChange={event => update({ reason: event.target.value })} />
+          <small>{draft.reason.length} / 200</small>
+        </label>
+
+        {clashing.length > 0 && (
+          <div className="block-warning">
+            <TriangleAlert size={16} />
+            <div>
+              <strong>Bu aralıkta {clashing.length} aktif randevu var.</strong>
+              <p>Kapalı zaman eklemek onları iptal etmez; gerekirse randevular listesinden ayrıca iptal edin.</p>
+            </div>
+          </div>
+        )}
+        {(localError || error) && <div className="inline-error">{localError || error}</div>}
+
+        <footer className="decision-actions">
+          <button type="button" className="decision-secondary" disabled={busy} onClick={onClose}>Vazgeç</button>
+          <button type="button" className="decision-primary" disabled={busy || !valid} onClick={() => onConfirm(draft)}>
+            {busy ? <><LoaderCircle className="spin" size={16} /> Ekleniyor…</> : 'Kapalı zamanı ekle'}
+          </button>
+        </footer>
+      </div>
+    </div>
+  );
+}
+
+function BlockRemoveModal({ block, busy, error, use24Hour, onClose, onConfirm }: {
+  block: AvailabilityBlock;
+  busy: boolean;
+  error: string;
+  use24Hour: boolean;
+  onClose: () => void;
+  onConfirm: () => void;
+}) {
+  const dialogRef = useModalShell(busy, onClose);
+  return (
+    <div className="decision-backdrop" onMouseDown={event => { if (event.target === event.currentTarget && !busy) onClose(); }}>
+      <div className="decision-modal cancel" role="dialog" aria-modal="true" aria-labelledby="block-remove-title" tabIndex={-1} ref={dialogRef}>
+        <header className="decision-header">
+          <span className="decision-icon"><Trash2 /></span>
+          <div><span className="eyebrow">Kapalı zaman</span><h2 id="block-remove-title">Kaydı kaldır</h2></div>
+          <button type="button" className="decision-close" aria-label="Pencereyi kapat" disabled={busy} onClick={onClose}><X size={18} /></button>
+        </header>
+        <p className="decision-description">Bu aralık yeniden açılacak; branşlarda daha önce açtığınız saatler tekrar randevuya sunulacak.</p>
+        <div className="decision-summary">
+          <div className="decision-time"><CalendarClock /><span>{formatBlockRange(block.start_at, block.end_at, use24Hour)}</span></div>
+          <div><strong>{block.reason || 'Açıklama girilmedi'}</strong></div>
+        </div>
+        {error && <div className="inline-error">{error}</div>}
+        <footer className="decision-actions">
+          <button type="button" className="decision-secondary" disabled={busy} onClick={onClose}>Vazgeç</button>
+          <button type="button" className="decision-primary" autoFocus disabled={busy} onClick={onConfirm}>
+            {busy ? <><LoaderCircle className="spin" size={16} /> Kaldırılıyor…</> : 'Kaydı kaldır'}
+          </button>
+        </footer>
+      </div>
+    </div>
+  );
+}
+
+function DecisionModal({ decision, busy, error, onClose, onConfirm }: {
+  decision: { appointment: Appointment; action: DecisionAction };
+  busy: boolean;
+  error: string;
+  onClose: () => void;
+  onConfirm: (adminNote: string) => void;
+}) {
+  const [adminNote, setAdminNote] = useState('');
+  const dialogRef = useModalShell(busy, onClose);
+  const { appointment, action } = decision;
+  const config = {
+    approve: { eyebrow: 'Randevu onayı', title: 'Randevuyu onayla', description: 'Bu saat kesinleştirilecek ve danışana onay e-postası gönderilecek.', button: 'Randevuyu onayla', icon: CircleCheck },
+    reject: { eyebrow: 'Talep sonucu', title: 'Talebi reddet', description: 'Seçilen saat yeniden müsait olacak ve danışana bilgilendirme gönderilecek.', button: 'Talebi reddet', icon: CircleX },
+    cancel: { eyebrow: 'Randevu iptali', title: 'Randevuyu iptal et', description: 'Onaylanmış randevu iptal edilecek ve saat yeniden kullanılabilir olacak.', button: 'Randevuyu iptal et', icon: Ban }
+  }[action];
+  const Icon = config.icon;
 
   return (
     <div className="decision-backdrop" onMouseDown={event => { if (event.target === event.currentTarget && !busy) onClose(); }}>

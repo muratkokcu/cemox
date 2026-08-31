@@ -571,11 +571,41 @@ async fn admin_decide_appointment(
     Ok(response)
 }
 
-async fn admin_list_blocks(State(state): State<AppState>) -> Result<Json<Value>, AppError> {
-    let db = state.db.clone();
+/// `from`/`to` verilmezse varsayılan pencere bugünden itibaren 90 gündür.
+/// Admin takvimi başka bir aya gittiğinde o ayın aralığını göndererek
+/// kapalı zamanları da o aya göre alır.
+async fn admin_list_blocks(
+    State(state): State<AppState>,
+    Query(params): Query<HashMap<String, String>>,
+) -> Result<Json<Value>, AppError> {
     let now = now_ms();
-    let blocks = blocking(move || db.list_blocks(now, now + 90 * DAY_MS)).await?;
+    let from = optional_timestamp(&params, "from", "Başlangıç")?.unwrap_or(now);
+    let to = optional_timestamp(&params, "to", "Bitiş")?.unwrap_or(now + 90 * DAY_MS);
+    if to <= from || to - from > 366 * DAY_MS {
+        return Err(AppError::validation("Kapalı zaman aralığı geçerli değil."));
+    }
+
+    let db = state.db.clone();
+    let blocks = blocking(move || db.list_blocks(from, to)).await?;
     Ok(Json(json!({ "blocks": blocks })))
+}
+
+/// Sorgu dizesindeki isteğe bağlı ISO zaman damgası; boşsa `None`, bozuksa hata.
+fn optional_timestamp(
+    params: &HashMap<String, String>,
+    key: &str,
+    label: &str,
+) -> Result<Option<i64>, AppError> {
+    match params
+        .get(key)
+        .map(String::as_str)
+        .filter(|value| !value.is_empty())
+    {
+        None => Ok(None),
+        Some(value) => parse_timestamp(value)
+            .map(Some)
+            .ok_or_else(|| AppError::validation(format!("{label} geçerli değil."))),
+    }
 }
 
 async fn admin_create_block(

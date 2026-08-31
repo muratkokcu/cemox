@@ -253,3 +253,97 @@ fn pending_holds_expire_after_24_hours() {
         "EXPIRED"
     );
 }
+
+#[tokio::test]
+async fn admin_blocks_can_be_listed_for_an_arbitrary_range() {
+    let server = common::start().await;
+    let (cookie, csrf) = server.login().await;
+    let headers = [("Cookie", cookie.as_str()), ("x-csrf-token", csrf.as_str())];
+
+    // Varsayılan 90 günlük pencerenin dışında iki kayıt.
+    for (start, end, reason) in [
+        (
+            "2020-01-05T00:00:00.000Z",
+            "2020-01-06T00:00:00.000Z",
+            "Geçmiş",
+        ),
+        (
+            "2040-05-01T00:00:00.000Z",
+            "2040-05-03T00:00:00.000Z",
+            "Uzak gelecek",
+        ),
+    ] {
+        let created = server
+            .request(
+                Method::POST,
+                "/api/admin/blocks",
+                &headers,
+                Some(json!({ "start": start, "end": end, "reason": reason })),
+            )
+            .await;
+        assert_eq!(created.status, 201, "{:?}", created.body);
+    }
+
+    // Parametresiz istek yalnızca bugünden itibaren 90 günü kapsar.
+    let default_window = server
+        .request(Method::GET, "/api/admin/blocks", &headers, None)
+        .await;
+    assert_eq!(default_window.status, 200);
+    assert_eq!(default_window.body["blocks"].as_array().unwrap().len(), 0);
+
+    // Geçmiş aralık artık erişilebilir.
+    let past = server
+        .request(
+            Method::GET,
+            "/api/admin/blocks?from=2020-01-01T00:00:00.000Z&to=2020-02-01T00:00:00.000Z",
+            &headers,
+            None,
+        )
+        .await;
+    assert_eq!(past.status, 200);
+    assert_eq!(past.body["blocks"].as_array().unwrap().len(), 1);
+    assert_eq!(past.body["blocks"][0]["reason"], "Geçmiş");
+
+    // 90 günden uzaktaki aralık da.
+    let future = server
+        .request(
+            Method::GET,
+            "/api/admin/blocks?from=2040-05-01T00:00:00.000Z&to=2040-06-01T00:00:00.000Z",
+            &headers,
+            None,
+        )
+        .await;
+    assert_eq!(future.body["blocks"].as_array().unwrap().len(), 1);
+    assert_eq!(future.body["blocks"][0]["reason"], "Uzak gelecek");
+
+    // Geçersiz aralıklar reddedilir.
+    for (query, message) in [
+        (
+            "?from=2040-06-01T00:00:00.000Z&to=2040-05-01T00:00:00.000Z",
+            "Kapalı zaman aralığı geçerli değil.",
+        ),
+        (
+            "?from=2020-01-01T00:00:00.000Z&to=2040-01-01T00:00:00.000Z",
+            "Kapalı zaman aralığı geçerli değil.",
+        ),
+        ("?from=yarin", "Başlangıç geçerli değil."),
+    ] {
+        let response = server
+            .request(
+                Method::GET,
+                &format!("/api/admin/blocks{query}"),
+                &headers,
+                None,
+            )
+            .await;
+        assert_eq!(response.status, 400, "{query}: {:?}", response.body);
+        assert_eq!(response.body["error"]["message"], message, "{query}");
+    }
+
+    // Boş parametreler yok sayılır ve varsayılan pencereye düşer.
+    let empty = server
+        .request(Method::GET, "/api/admin/blocks?from=&to=", &headers, None)
+        .await;
+    assert_eq!(empty.status, 200);
+    assert_eq!(empty.body["blocks"].as_array().unwrap().len(), 0);
+}

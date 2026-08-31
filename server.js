@@ -94,8 +94,14 @@ export function createApp({ config = loadConfig(), database = null, emailService
     } catch (error) { next(error); }
   });
 
-  app.get('/api/admin/blocks', requireAdmin(db), (req, res) => {
-    res.json({ blocks: db.listBlocks() });
+  app.get('/api/admin/blocks', requireAdmin(db), (req, res, next) => {
+    try {
+      const now = Date.now();
+      const from = req.query.from ? parseTimestamp(req.query.from, 'Başlangıç') : now;
+      const to = req.query.to ? parseTimestamp(req.query.to, 'Bitiş') : now + 90 * 86400000;
+      if (to <= from || to - from > 366 * 86400000) throw validationError('Kapalı zaman aralığı geçerli değil.');
+      res.json({ blocks: db.listBlocks(from, to) });
+    } catch (error) { next(error); }
   });
 
   app.post('/api/admin/blocks', requireAdmin(db), requireCsrf, (req, res, next) => {

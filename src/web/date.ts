@@ -81,3 +81,40 @@ export function timeOptions(): string[] {
   }
   return options;
 }
+
+const dayMonthYear = new Intl.DateTimeFormat('tr-TR', {
+  day: 'numeric', month: 'long', year: 'numeric', timeZone: TIME_ZONE
+});
+const dayMonth = new Intl.DateTimeFormat('tr-TR', {
+  day: 'numeric', month: 'long', timeZone: TIME_ZONE
+});
+
+/**
+ * Kapalı zamanın bitişi dışlayıcıdır: 3 Eylül 00:00 → 4 Eylül 00:00 yalnızca 3 Eylül'ü kapatır.
+ * Bu yüzden son kapalı gün, bitişten bir milisaniye öncesidir.
+ */
+function lastCoveredDay(endAt: number): number {
+  return endAt - 1;
+}
+
+/** Aralık yerel gece yarısından gece yarısına mı uzanıyor? */
+export function isFullDayRange(startAt: number, endAt: number): boolean {
+  return endAt > startAt
+    && startAt === toTimestamp(localDateKey(startAt), '00:00')
+    && endAt === toTimestamp(localDateKey(endAt), '00:00');
+}
+
+/** Kapalı zaman aralığını okunur biçime çevirir. */
+export function formatBlockRange(startAt: number, endAt: number, use24Hour = true): string {
+  if (isFullDayRange(startAt, endAt)) {
+    const last = lastCoveredDay(endAt);
+    return localDateKey(startAt) === localDateKey(last)
+      ? `${dayMonthYear.format(startAt)} · Tüm gün`
+      : `${dayMonth.format(startAt)} – ${dayMonthYear.format(last)} · Tüm gün`;
+  }
+  if (localDateKey(startAt) === localDateKey(endAt)) {
+    return `${dayMonthYear.format(startAt)} · ${formatTime(startAt, use24Hour)} – ${formatTime(endAt, use24Hour)}`;
+  }
+  return `${dayMonthYear.format(startAt)} ${formatTime(startAt, use24Hour)}`
+    + ` → ${dayMonthYear.format(endAt)} ${formatTime(endAt, use24Hour)}`;
+}

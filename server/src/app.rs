@@ -28,6 +28,8 @@ use crate::time::{
 
 const SESSION_TTL_MS: i64 = 12 * 60 * 60 * 1000;
 const SESSION_COOKIE: &str = "cemox_admin";
+/// Elle oluşturulan kayıtlarda kaynağı belli etmek için yönetici notuna yazılır.
+const MANUAL_ENTRY_NOTE: &str = "Panelden elle oluşturuldu (telefon).";
 
 #[derive(Clone)]
 pub struct AppState {
@@ -93,7 +95,10 @@ pub fn build_router(state: AppState) -> Router {
     let admin = Router::new()
         .route("/api/admin/session", get(admin_session))
         .route("/api/admin/logout", post(admin_logout))
-        .route("/api/admin/appointments", get(admin_list_appointments))
+        .route(
+            "/api/admin/appointments",
+            get(admin_list_appointments).post(admin_create_appointment),
+        )
         .route(
             "/api/admin/appointments/{id}",
             axum::routing::patch(admin_decide_appointment),
@@ -601,6 +606,83 @@ fn parse_count(
         Ok(count) if (min..=max).contains(&count) => Ok(count),
         _ => Err(AppError::validation(format!("{label} geçerli değil."))),
     }
+}
+
+/// Panelden elle randevu oluşturur (telefonla gelen danışan için).
+/// Kamuya açık formdan farkları: bal küpü ve zamanlama kontrolleri yoktur,
+/// e-posta isteğe bağlıdır, minimum bildirim süresi aranmaz ve saatin
+/// yayınlanmış müsaitlikte olması gerekmez. Kayıt doğrudan onaylı açılır.
+async fn admin_create_appointment(
+    State(state): State<AppState>,
+    body: Bytes,
+) -> Result<Response, AppError> {
+    let payload = parse_json(&body)?;
+    if !payload.is_object() {
+        return Err(AppError::validation("Geçersiz form verisi."));
+    }
+
+    let service_id = as_string(&payload, "serviceId");
+    let service_name = assert_service(&service_id)?;
+
+    let start_at = timestamp_field(&payload, "start", "Randevu saati")?;
+    assert_slot_grid(start_at)?;
+    let now = now_ms();
+    if start_at < now {
+        return Err(AppError::validation(
+            "Geçmiş bir saate randevu oluşturulamaz.",
+        ));
+    }
+    if start_at > now + 365 * DAY_MS {
+        return Err(AppError::validation(
+            "Randevu en fazla bir yıl sonrasına oluşturulabilir.",
+        ));
+    }
+
+    let name = normalize_text(&payload, "name", 2, 100, "Ad soyad")?;
+
+    let phone: String = as_string(&payload, "phone")
+        .chars()
+        .filter(|character| character.is_ascii_digit() || *character == '+')
+        .collect();
+    if !is_valid_phone(&phone) {
+        return Err(AppError::validation("Geçerli bir telefon numarası girin."));
+    }
+
+    // Telefonla gelen danışanın e-postası olmayabilir; boş bırakılabilir.
+    let email = as_string(&payload, "email").trim().to_lowercase();
+    if !email.is_empty() && (!is_valid_email(&email) || email.chars().count() > 160) {
+        return Err(AppError::validation("Geçerli bir e-posta adresi girin."));
+    }
+
+    let note = normalize_text(&payload, "note", 0, 500, "Kısa not")?;
+
+    let input = NewAppointment {
+        service_id,
+        service_name: service_name.to_string(),
+        start_at,
+        end_at: start_at + BOOKING_RULES.slot_ms(),
+        name,
+        email,
+        phone,
+        note,
+    };
+
+    let db = state.db.clone();
+    let appointment =
+        blocking(move || db.create_manual_appointment(&input, MANUAL_ENTRY_NOTE, now)).await?;
+
+    let response = (
+        StatusCode::CREATED,
+        Json(json!({ "appointment": appointment })),
+    )
+        .into_response();
+
+    // E-posta verildiyse onay bildirimi gider; verilmediyse sessizce atlanır.
+    if !appointment.email.is_empty() {
+        let email = state.email.clone();
+        tokio::spawn(async move { email.appointment_approved(&appointment).await });
+    }
+    Ok(response)
 }
 
 async fn admin_decide_appointment(

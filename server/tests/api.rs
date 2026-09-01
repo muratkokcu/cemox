@@ -920,3 +920,203 @@ async fn admin_can_search_appointments_and_read_status_counts() {
     assert_eq!(long.status, 400);
     assert_eq!(long.body["error"]["message"], "Arama metni çok uzun.");
 }
+
+#[tokio::test]
+async fn admin_can_create_an_appointment_by_hand() {
+    let server = common::start().await;
+    let (cookie, csrf) = server.login().await;
+    let headers = [("Cookie", cookie.as_str()), ("x-csrf-token", csrf.as_str())];
+    let read = [("Cookie", cookie.as_str())];
+
+    // 30 dakikalık ızgarada, yayınlanmamış bir saat seç.
+    let now = now_ms();
+    let local = civil_from_ms(now + BOOKING_RULES.offset_ms());
+    let slot = |day_offset: i64, hour: i64, minute: i64| -> i64 {
+        utc_ms_hm(
+            local.year,
+            local.month as i64 - 1,
+            local.day as i64 + day_offset,
+            hour,
+            minute,
+        ) - BOOKING_RULES.offset_ms()
+    };
+    let start_at = slot(1, 19, 0); // yarın 19:00 — kamuya açık takvimde sunulmuyor
+
+    // Kamuya açık akış bu saati reddeder: yayınlanmamış ve bildirim süresi dolmamış.
+    let public = server
+        .post(
+            "/api/appointments",
+            json!({
+                "serviceId": "medical-fitness", "start": to_iso_string(start_at),
+                "name": "Telefon Danışanı", "email": "telefon@example.com",
+                "phone": "+905551110000", "note": "", "consent": true,
+                "website": "", "startedAt": now - 5_000
+            }),
+        )
+        .await;
+    assert_ne!(
+        public.status, 201,
+        "kamuya açık akış yayınlanmamış saati kabul etmemeli"
+    );
+
+    // Yönetici aynı saate elle randevu oluşturabilir.
+    let created = server
+        .request(
+            Method::POST,
+            "/api/admin/appointments",
+            &headers,
+            Some(json!({
+                "serviceId": "medical-fitness",
+                "start": to_iso_string(start_at),
+                "name": "Telefon Danışanı",
+                "phone": "0555 111 00 00",
+                "note": "Telefonla talep etti."
+            })),
+        )
+        .await;
+    assert_eq!(created.status, 201, "{:?}", created.body);
+    let appointment = &created.body["appointment"];
+    assert_eq!(
+        appointment["status"], "APPROVED",
+        "elle giriş doğrudan onaylıdır"
+    );
+    assert_eq!(
+        appointment["phone"], "05551110000",
+        "telefon rakamlara indirgenir"
+    );
+    assert_eq!(appointment["email"], "", "e-posta isteğe bağlıdır");
+    assert!(
+        appointment["admin_note"]
+            .as_str()
+            .unwrap()
+            .contains("elle oluşturuldu"),
+        "kaynağı yönetici notunda kalır"
+    );
+    assert!(
+        appointment["decision_at"].is_number(),
+        "karar zamanı yazılır"
+    );
+
+    // Aynı saat artık dolu: ikinci giriş de, kamuya açık rezervasyon da reddedilir.
+    let duplicate = server
+        .request(
+            Method::POST,
+            "/api/admin/appointments",
+            &headers,
+            Some(json!({
+                "serviceId": "kisisel-antrenman", "start": to_iso_string(start_at),
+                "name": "Başka Kişi", "phone": "+905552220000"
+            })),
+        )
+        .await;
+    assert_eq!(duplicate.status, 409);
+    assert_eq!(
+        duplicate.body["error"]["message"],
+        "Bu saat başka bir randevu veya kapalı zamanla çakışıyor."
+    );
+
+    // Kapalı zamanla çakışan saat de reddedilir.
+    let blocked_start = slot(2, 15, 0);
+    server
+        .request(
+            Method::POST,
+            "/api/admin/blocks",
+            &headers,
+            Some(json!({
+                "start": to_iso_string(blocked_start),
+                "end": to_iso_string(blocked_start + 3_600_000),
+                "reason": "Toplantı"
+            })),
+        )
+        .await;
+    let in_block = server
+        .request(
+            Method::POST,
+            "/api/admin/appointments",
+            &headers,
+            Some(json!({
+                "serviceId": "medical-fitness", "start": to_iso_string(blocked_start),
+                "name": "Kapalı Zaman", "phone": "+905553330000"
+            })),
+        )
+        .await;
+    assert_eq!(in_block.status, 409);
+
+    // Doğrulamalar.
+    let base = json!({
+        "serviceId": "medical-fitness", "start": to_iso_string(slot(3, 11, 0)),
+        "name": "Geçerli Ad", "phone": "+905554440000"
+    });
+    let with = |key: &str, value: Value| {
+        let mut body = base.clone();
+        body[key] = value;
+        body
+    };
+    for (body, message) in [
+        (with("serviceId", json!("yok")), "Geçerli bir hizmet seçin."),
+        (
+            with("start", json!(to_iso_string(slot(3, 11, 7)))),
+            "Slot 30 dakikalık takvime uygun değil.",
+        ),
+        (
+            with("start", json!("2020-01-01T07:00:00.000Z")),
+            "Geçmiş bir saate randevu oluşturulamaz.",
+        ),
+        (
+            with("start", json!(to_iso_string(slot(400, 11, 0)))),
+            "Randevu en fazla bir yıl sonrasına oluşturulabilir.",
+        ),
+        (
+            with("name", json!("A")),
+            "Ad soyad alanı 2–100 karakter olmalıdır.",
+        ),
+        (
+            with("phone", json!("123")),
+            "Geçerli bir telefon numarası girin.",
+        ),
+        (
+            with("email", json!("bozuk")),
+            "Geçerli bir e-posta adresi girin.",
+        ),
+    ] {
+        let response = server
+            .request(
+                Method::POST,
+                "/api/admin/appointments",
+                &headers,
+                Some(body),
+            )
+            .await;
+        assert_eq!(response.status, 400, "{:?}", response.body);
+        assert_eq!(response.body["error"]["message"], message);
+    }
+
+    // CSRF başlığı olmadan oluşturulamaz.
+    let no_csrf = server
+        .request(
+            Method::POST,
+            "/api/admin/appointments",
+            &read,
+            Some(base.clone()),
+        )
+        .await;
+    assert_eq!(no_csrf.status, 403);
+
+    // Elle giriş listede ve takvim sorgusunda görünür.
+    let listed = server
+        .request(
+            Method::GET,
+            "/api/admin/appointments?status=APPROVED",
+            &read,
+            None,
+        )
+        .await;
+    assert_eq!(listed.body["total"], 1);
+    assert_eq!(listed.body["appointments"][0]["name"], "Telefon Danışanı");
+
+    // Ve o saat artık kamuya açık müsaitlikte sunulmaz.
+    let availability = server
+        .get("/api/availability?service=medical-fitness")
+        .await;
+    assert!(!slot_starts(&availability.body).contains(&to_iso_string(start_at)));
+}

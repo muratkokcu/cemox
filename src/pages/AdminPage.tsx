@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Ban, BellRing, CalendarClock, CalendarOff, Check, CheckCheck, ChevronDown, CircleCheck, CircleX, Copy as CopyIcon, Hourglass, LoaderCircle, LogOut, Plus, RefreshCw, Search, ShieldCheck, Trash2, TriangleAlert, X } from 'lucide-react';
+import { Ban, BellRing, CalendarClock, CalendarOff, Check, CheckCheck, ChevronDown, CircleCheck, CircleX, Copy as CopyIcon, Hourglass, LoaderCircle, LogOut, Plus, RefreshCw, Search, ShieldCheck, Trash2, TriangleAlert, UserPlus, X } from 'lucide-react';
 import { MonthCalendar } from '../components/MonthCalendar';
 import { TimeFormatToggle } from '../components/TimeFormatToggle';
 import { api, ApiError } from '../web/api';
@@ -25,6 +25,52 @@ const WEEKDAYS: Array<{ label: string; value: number }> = [
 ];
 
 type SlotChange = { startAt: number; open: boolean };
+/** Telefonla gelen danışan için elle randevu girişi. */
+type ManualDraft = {
+  serviceId: string; date: string; time: string;
+  name: string; phone: string; email: string; note: string;
+};
+
+function validPhone(value: string): boolean {
+  const digits = value.replace(/[^0-9]/g, '');
+  return digits.length >= 10 && digits.length <= 15;
+}
+
+function validEmail(value: string): boolean {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
+}
+
+/** Tarih ve saat doğrulaması; hem önizleme hem gönderim kontrolü bunu paylaşır. */
+function manualTimeError(draft: ManualDraft): string {
+  const startAt = toTimestamp(draft.date, draft.time);
+  if (!Number.isFinite(startAt)) return 'Geçerli bir tarih ve saat seçin.';
+  if (startAt < Date.now()) return 'Geçmiş bir saate randevu oluşturulamaz.';
+  return '';
+}
+
+/** Gönderimi engelleyen hata; sunucudaki doğrulamanın istemci karşılığı. */
+function validateManual(draft: ManualDraft): string {
+  const timeError = manualTimeError(draft);
+  if (timeError) return timeError;
+  if (draft.name.trim().length < 2) return 'Ad soyad en az 2 karakter olmalıdır.';
+  if (!validPhone(draft.phone)) return 'Geçerli bir telefon numarası girin.';
+  if (draft.email.trim() && !validEmail(draft.email.trim())) return 'Geçerli bir e-posta adresi girin.';
+  return '';
+}
+
+/**
+ * Kullanıcıya gösterilecek hata. Henüz doldurulmamış zorunlu alanlar için uyarı
+ * verilmez — form açılır açılmaz hata göstermek yerine buton kapalı bırakılır;
+ * uyarı yalnızca girilen değer hatalıysa çıkar.
+ */
+function manualVisibleError(draft: ManualDraft): string {
+  const timeError = manualTimeError(draft);
+  if (timeError) return timeError;
+  if (draft.name.trim() && draft.name.trim().length < 2) return 'Ad soyad en az 2 karakter olmalıdır.';
+  if (draft.phone.trim() && !validPhone(draft.phone)) return 'Geçerli bir telefon numarası girin.';
+  if (draft.email.trim() && !validEmail(draft.email.trim())) return 'Geçerli bir e-posta adresi girin.';
+  return '';
+}
 
 /** Yeni talep yoklaması. Arka plandaki sekmede tarayıcı zaten kısıtlar. */
 const POLL_MS = 60_000;
@@ -158,6 +204,9 @@ function AdminDashboard({ csrf, onExpired }: { csrf: string; onExpired: () => vo
   const [newRequests, setNewRequests] = useState(0);
   const [anchorTime, setAnchorTime] = useState<string | null>(null);
   const [copying, setCopying] = useState(false);
+  const [manual, setManual] = useState<ManualDraft | null>(null);
+  const [manualBusy, setManualBusy] = useState(false);
+  const [manualError, setManualError] = useState('');
 
   const notify = useCallback((message: string) => {
     setToast(message);
@@ -495,6 +544,41 @@ function AdminDashboard({ csrf, onExpired }: { csrf: string; onExpired: () => vo
     } finally { setBlockBusy(false); }
   }
 
+  /** Modalı seçili gün ve branşla ön doldurarak açar. */
+  function openManual() {
+    setManualError('');
+    setManual({
+      serviceId, date: selectedDate, time: '10:00',
+      name: '', phone: '', email: '', note: ''
+    });
+  }
+
+  async function createManual(draft: ManualDraft) {
+    setManualBusy(true); setManualError('');
+    try {
+      await api('/api/admin/appointments', {
+        method: 'POST',
+        body: JSON.stringify({
+          serviceId: draft.serviceId,
+          start: new Date(toTimestamp(draft.date, draft.time)).toISOString(),
+          name: draft.name.trim(),
+          phone: draft.phone.trim(),
+          email: draft.email.trim(),
+          note: draft.note.trim()
+        })
+      }, csrf);
+      setManual(null);
+      notify('Randevu oluşturuldu.');
+      // Kayıt başka bir aya düştüyse takvimi oraya taşı, aksi halde görünmezdi.
+      const targetMonth = monthKey(draft.date);
+      if (targetMonth !== month) { setMonth(targetMonth); setSelectedDate(draft.date); }
+      await refreshAll();
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 401) guard(err);
+      else setManualError(err instanceof Error ? err.message : 'Randevu oluşturulamadı.');
+    } finally { setManualBusy(false); }
+  }
+
   async function logout() {
     try { await api('/api/admin/logout', { method: 'POST' }, csrf); } catch { /* session is cleared locally either way */ }
     onExpired();
@@ -576,6 +660,7 @@ function AdminDashboard({ csrf, onExpired }: { csrf: string; onExpired: () => vo
           onSearch={setSearch}
           onLoadMore={loadMoreAppointments}
           onDecide={openDecision}
+          onCreate={openManual}
         />
       </main>
       {decision && <DecisionModal decision={decision} busy={decisionBusy} error={decisionError} onClose={() => { if (!decisionBusy) setDecision(null); }} onConfirm={decide} />}
@@ -587,6 +672,16 @@ function AdminDashboard({ csrf, onExpired }: { csrf: string; onExpired: () => vo
           use24Hour={use24Hour}
           onClose={() => { if (!blockBusy) setBlockDraft(null); }}
           onConfirm={createBlock}
+        />
+      )}
+      {manual && (
+        <ManualModal
+          initial={manual}
+          services={services}
+          busy={manualBusy}
+          error={manualError}
+          onClose={() => { if (!manualBusy) setManual(null); }}
+          onConfirm={createManual}
         />
       )}
       {copying && (
@@ -640,7 +735,7 @@ function useTicker(intervalMs: number): number {
   return now;
 }
 
-function AppointmentSection({ list, loading, moreBusy, filter, search, searching, onFilter, onSearch, onLoadMore, onDecide }: {
+function AppointmentSection({ list, loading, moreBusy, filter, search, searching, onFilter, onSearch, onLoadMore, onDecide, onCreate }: {
   list: AppointmentList;
   loading: boolean;
   moreBusy: boolean;
@@ -651,6 +746,7 @@ function AppointmentSection({ list, loading, moreBusy, filter, search, searching
   onSearch: (value: string) => void;
   onLoadMore: () => void;
   onDecide: (appointment: Appointment, action: DecisionAction) => void;
+  onCreate: () => void;
 }) {
   // Tutma süresi dakika çözünürlüğünde gösterildiği için yarım dakikalık tik yeterli.
   const now = useTicker(30_000);
@@ -661,7 +757,13 @@ function AppointmentSection({ list, loading, moreBusy, filter, search, searching
   return (
     <section className="appointment-section">
       <header>
-        <div><span className="eyebrow">Randevular</span><h2>Talep ve onaylar</h2></div>
+        <div>
+          <span className="eyebrow">Randevular</span>
+          <h2>Talep ve onaylar</h2>
+          <button type="button" className="manual-add" onClick={onCreate}>
+            <UserPlus size={15} /> Telefonla randevu ekle
+          </button>
+        </div>
         <div className="appointment-tools">
           <div className="search-field">
             {searching ? <LoaderCircle className="spin" size={15} /> : <Search size={15} />}
@@ -814,6 +916,84 @@ function BlockSection({ blocks, month, loading, use24Hour, onAdd, onRemove }: {
         ))}
       </div>
     </section>
+  );
+}
+
+function ManualModal({ initial, services, busy, error, onClose, onConfirm }: {
+  initial: ManualDraft;
+  services: Service[];
+  busy: boolean;
+  error: string;
+  onClose: () => void;
+  onConfirm: (draft: ManualDraft) => void;
+}) {
+  const [draft, setDraft] = useState(initial);
+  const dialogRef = useModalShell(busy, onClose);
+  const update = (patch: Partial<ManualDraft>) => setDraft(current => ({ ...current, ...patch }));
+  const blocking = validateManual(draft);
+  const visibleError = manualVisibleError(draft);
+  const startAt = toTimestamp(draft.date, draft.time);
+
+  return (
+    <div className="decision-backdrop" onMouseDown={event => { if (event.target === event.currentTarget && !busy) onClose(); }}>
+      <div className="decision-modal manual-modal" role="dialog" aria-modal="true" aria-labelledby="manual-title" tabIndex={-1} ref={dialogRef}>
+        <header className="decision-header">
+          <span className="decision-icon"><UserPlus /></span>
+          <div><span className="eyebrow">Elle giriş</span><h2 id="manual-title">Telefonla randevu ekle</h2></div>
+          <button type="button" className="decision-close" aria-label="Pencereyi kapat" disabled={busy} onClick={onClose}><X size={18} /></button>
+        </header>
+        <p className="decision-description">
+          Kayıt doğrudan onaylı olarak açılır. Yayınlanmamış bir saati de verebilirsiniz;
+          yalnızca başka bir randevu veya kapalı zamanla çakışamaz.
+        </p>
+
+        <div className="manual-fields">
+          <label className="wide">Branş
+            <select value={draft.serviceId} onChange={event => update({ serviceId: event.target.value })}>
+              {services.map(service => <option key={service.id} value={service.id}>{service.name}</option>)}
+            </select>
+          </label>
+          <label>Tarih
+            <input type="date" required value={draft.date} onChange={event => update({ date: event.target.value })} />
+          </label>
+          <label>Saat
+            <select value={draft.time} onChange={event => update({ time: event.target.value })}>
+              {timeOptions().map(time => <option key={time} value={time}>{time}</option>)}
+            </select>
+          </label>
+          <label className="wide">Ad soyad
+            <input type="text" required maxLength={100} autoFocus value={draft.name} placeholder="Danışanın adı" onChange={event => update({ name: event.target.value })} />
+          </label>
+          <label>Telefon
+            <input type="tel" required value={draft.phone} placeholder="0555 111 22 33" onChange={event => update({ phone: event.target.value })} />
+          </label>
+          <label>E-posta <span>(isteğe bağlı)</span>
+            <input type="email" value={draft.email} placeholder="Girilirse onay e-postası gider" onChange={event => update({ email: event.target.value })} />
+          </label>
+        </div>
+
+        {!manualTimeError(draft) && (
+          <div className="manual-preview">
+            <CalendarClock />
+            <span>{formatDateTime(startAt)}</span>
+          </div>
+        )}
+
+        <label className="decision-note">Not <span>(isteğe bağlı)</span>
+          <textarea rows={2} maxLength={500} placeholder="Görüşmeye dair kısa bir not…" value={draft.note} onChange={event => update({ note: event.target.value })} />
+          <small>{draft.note.length} / 500</small>
+        </label>
+
+        {(visibleError || error) && <div className="inline-error">{visibleError || error}</div>}
+
+        <footer className="decision-actions">
+          <button type="button" className="decision-secondary" disabled={busy} onClick={onClose}>Vazgeç</button>
+          <button type="button" className="decision-primary" disabled={busy || !!blocking} onClick={() => onConfirm(draft)}>
+            {busy ? <><LoaderCircle className="spin" size={16} /> Oluşturuluyor…</> : 'Randevuyu oluştur'}
+          </button>
+        </footer>
+      </div>
+    </div>
   );
 }
 

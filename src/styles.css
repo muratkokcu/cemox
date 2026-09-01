@@ -320,6 +320,19 @@ a { color: inherit; text-decoration: none; }
 .decision-modal.reject .decision-primary,.decision-modal.cancel .decision-primary { border-color: var(--red); background: var(--red); }
 @keyframes decision-fade { from { opacity: 0; } }
 @keyframes decision-enter { from { opacity: 0; transform: translateY(10px) scale(.985); } }
+/* Elle randevu girişi */
+.manual-add { display: inline-flex; align-items: center; gap: 6px; margin-top: 9px; padding: 8px 12px; border: 1px solid var(--green); border-radius: 7px; color: white; background: var(--green); font-size: 11px; font-weight: 750; cursor: pointer; }
+.manual-add:hover { background: var(--green-2); }
+.manual-modal .decision-icon { color: var(--green); background: var(--green-soft); }
+.manual-fields { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 13px; }
+.manual-fields label { display: block; color: #4d514b; font-size: 11px; font-weight: 750; }
+.manual-fields label.wide { grid-column: 1/-1; }
+.manual-fields label > span { color: #959992; font-weight: 500; }
+.manual-fields input, .manual-fields select { width: 100%; display: block; margin-top: 7px; padding: 10px 11px; border: 1px solid #d7d9d3; border-radius: 8px; color: var(--ink); background: white; font-family: inherit; font-size: 12px; font-weight: 500; }
+.manual-fields input:focus, .manual-fields select:focus { border-color: #9da69e; outline: 3px solid rgba(35,77,56,.1); }
+.manual-preview { display: flex; align-items: center; gap: 9px; margin-top: 14px; padding: 12px 14px; border: 1px solid #d9e3dc; border-radius: 9px; color: var(--green); background: var(--green-soft); font-size: 12px; font-weight: 750; }
+.manual-preview svg { width: 17px; height: 17px; flex: none; }
+
 /* Yeni talep bildirimi — liste kendiliğinden değişmez, uygulama kararı kullanıcıda */
 .new-requests { position: fixed; top: 82px; left: 50%; z-index: 45; display: flex; align-items: center; gap: 9px; padding: 10px 12px 10px 15px; border: 1px solid #2c5a41; border-radius: 22px; color: white; background: var(--green); box-shadow: 0 10px 30px rgba(20,45,32,.28); font-size: 12px; font-weight: 750; cursor: pointer; transform: translateX(-50%); animation: new-requests-in .22s ease-out; }
 .new-requests:hover { background: var(--green-2); }
@@ -414,6 +427,8 @@ a { color: inherit; text-decoration: none; }
 }
 
 @media (max-width: 760px) {
+  .manual-fields { grid-template-columns: 1fr; }
+  .manual-add { width: 100%; justify-content: center; }
   .appointment-tools { align-items: stretch; width: 100%; }
   .search-field { width: 100%; }
   .filter-tabs { justify-content: flex-start; }

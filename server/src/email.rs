@@ -78,6 +78,10 @@ impl EmailService {
     }
 
     async fn send(&self, to: &str, subject: &str, html: String) {
+        // Elle oluşturulan randevularda e-posta boş bırakılabilir.
+        if to.trim().is_empty() {
+            return;
+        }
         let Some(transport) = &self.inner.transport else {
             tracing::info!("[email disabled] {subject} -> {}", mask_email(to));
             return;

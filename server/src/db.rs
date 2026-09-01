@@ -279,6 +279,60 @@ impl Db {
         expire_pending_conn(&conn, now)
     }
 
+    /// Panelden elle oluşturulan randevu. Kamuya açık akıştan farkları:
+    /// doğrudan APPROVED yazılır (yönetici kararını telefonda vermiştir),
+    /// mükerrer iletişim kontrolü uygulanmaz (o kontrol formu spam'a karşı korur)
+    /// ve saatin yayınlanmış müsaitlikte olması gerekmez — yönetici kapalı bir
+    /// saati de verebilir. Çakışma ve kapalı zaman kontrolü yine geçerlidir.
+    pub fn create_manual_appointment(
+        &self,
+        input: &NewAppointment,
+        admin_note: &str,
+        now: i64,
+    ) -> Result<Appointment, AppError> {
+        let mut conn = self.conn()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        expire_pending_conn(&tx, now)?;
+
+        if !is_range_free_conn(
+            &tx,
+            input.start_at,
+            input.end_at + BOOKING_RULES.buffer_ms(),
+            now,
+            "",
+        )? {
+            return Err(AppError::conflict(
+                "Bu saat başka bir randevu veya kapalı zamanla çakışıyor.",
+            ));
+        }
+
+        let id = Uuid::new_v4().to_string();
+        tx.execute(
+            "INSERT INTO appointments \
+               (id, service_id, service_name, start_at, end_at, name, email, phone, note, \
+                status, hold_expires_at, created_at, decision_at, admin_note) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'APPROVED', ?, ?, ?, ?)",
+            params![
+                id,
+                input.service_id,
+                input.service_name,
+                input.start_at,
+                input.end_at,
+                input.name,
+                input.email,
+                input.phone,
+                input.note,
+                now,
+                now,
+                now,
+                admin_note
+            ],
+        )?;
+        let appointment = get_appointment_conn(&tx, &id)?;
+        tx.commit()?;
+        appointment.ok_or_else(|| AppError::internal("randevu kaydedilemedi"))
+    }
+
     pub fn get_appointment(&self, id: &str) -> Result<Option<Appointment>, AppError> {
         let conn = self.conn()?;
         get_appointment_conn(&conn, id)

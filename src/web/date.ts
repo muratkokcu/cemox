@@ -74,12 +74,25 @@ export function formatTime(value: number | string, use24Hour = true): string {
   }).format(new Date(value));
 }
 
-export function timeOptions(): string[] {
+/** Dakikayı "HH:MM" biçimine çevirir. */
+export function minuteLabel(minute: number): string {
+  return `${String(Math.floor(minute / 60)).padStart(2, '0')}:${String(minute % 60).padStart(2, '0')}`;
+}
+
+/**
+ * Verilen pencere için 30 dakikalık saat listesi.
+ * Pencere verilmezse sunucudaki varsayılanla (08:00–22:00) aynı listeyi üretir;
+ * ayarlar yüklenene kadar arayüzün boş kalmaması için.
+ */
+export function timeOptions(startMinute = 8 * 60, endMinute = 22 * 60): string[] {
   const options: string[] = [];
-  for (let minute = 8 * 60; minute < 22 * 60; minute += 30) {
-    options.push(`${String(Math.floor(minute / 60)).padStart(2, '0')}:${String(minute % 60).padStart(2, '0')}`);
-  }
+  for (let minute = startMinute; minute < endMinute; minute += 30) options.push(minuteLabel(minute));
   return options;
+}
+
+/** Bir tarihin hafta günü (0 = Pazar), çalışma saatleri eşlemesi için. */
+export function weekdayOf(dateKey: string): number {
+  return new Date(`${dateKey}T00:00:00Z`).getUTCDay();
 }
 
 const dayMonthYear = new Intl.DateTimeFormat('tr-TR', {

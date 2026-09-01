@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Ban, BellRing, CalendarClock, CalendarOff, Check, CheckCheck, ChevronDown, CircleCheck, CircleX, Copy as CopyIcon, Hourglass, LoaderCircle, LogOut, Plus, RefreshCw, PencilLine, Search, ShieldCheck, Trash2, TriangleAlert, UserPlus, X } from 'lucide-react';
+import { Ban, BellRing, CalendarClock, CalendarOff, Check, CheckCheck, ChevronDown, CircleCheck, CircleX, Clock, Copy as CopyIcon, Hourglass, LoaderCircle, LogOut, Plus, RefreshCw, PencilLine, Search, ShieldCheck, Trash2, TriangleAlert, UserPlus, X } from 'lucide-react';
 import { MonthCalendar } from '../components/MonthCalendar';
 import { TimeFormatToggle } from '../components/TimeFormatToggle';
 import { api, ApiError } from '../web/api';
-import { addDays, addMonths, DAY_MS, formatBlockRange, formatDateTime, formatDuration, formatMonth, formatRelative, formatSelectedDate, formatTime, localDateKey, monthDays, monthKey, monthRange, timeOptions, toTimestamp } from '../web/date';
-import type { AdminSlot, Appointment, AppointmentStatus, AvailabilityBlock, Service } from '../web/types';
+import { addDays, addMonths, DAY_MS, formatBlockRange, formatDateTime, formatDuration, formatMonth, formatRelative, formatSelectedDate, formatTime, localDateKey, minuteLabel, monthDays, monthKey, monthRange, timeOptions, toTimestamp, weekdayOf } from '../web/date';
+import type { AdminSlot, Appointment, AppointmentStatus, AvailabilityBlock, Service, WorkingHours } from '../web/types';
 
 /** Takvim görünümünün verisi: gezilen ay ve seçili branşla sınırlı, sayfalanmamış. */
 type DashboardData = { slots: AdminSlot[]; monthAppointments: Appointment[]; blocks: AvailabilityBlock[] };
@@ -216,6 +216,10 @@ function AdminDashboard({ csrf, onExpired }: { csrf: string; onExpired: () => vo
   const [newRequests, setNewRequests] = useState(0);
   const [anchorTime, setAnchorTime] = useState<string | null>(null);
   const [copying, setCopying] = useState(false);
+  const [workingHours, setWorkingHours] = useState<WorkingHours[]>([]);
+  const [hoursOpen, setHoursOpen] = useState(false);
+  const [hoursBusy, setHoursBusy] = useState(false);
+  const [hoursError, setHoursError] = useState('');
   const [form, setForm] = useState<AppointmentForm | null>(null);
   const [formBusy, setFormBusy] = useState(false);
   const [formError, setFormError] = useState('');
@@ -230,6 +234,12 @@ function AdminDashboard({ csrf, onExpired }: { csrf: string; onExpired: () => vo
     setError(err instanceof Error ? err.message : 'İşlem tamamlanamadı.');
     return false;
   }, [onExpired]);
+
+  useEffect(() => {
+    api<{ hours: WorkingHours[] }>('/api/admin/working-hours')
+      .then(result => setWorkingHours(result.hours))
+      .catch(guard);
+  }, [guard]);
 
   useEffect(() => {
     api<{ services: Service[] }>('/api/services')
@@ -366,6 +376,44 @@ function AdminDashboard({ csrf, onExpired }: { csrf: string; onExpired: () => vo
   }, [data, serviceId]);
 
   const selectedService = services.find(service => service.id === serviceId);
+  /** Seçili günün çalışma penceresi; ayarlar yüklenmediyse varsayılan kullanılır. */
+  const dayWindow = workingHours.find(entry => entry.weekday === weekdayOf(selectedDate));
+  const dayClosed = dayWindow?.closed ?? false;
+  const dayTimes = useMemo(
+    () => (dayClosed ? [] : timeOptions(dayWindow?.start_minute, dayWindow?.end_minute)),
+    [dayClosed, dayWindow?.start_minute, dayWindow?.end_minute]
+  );
+
+  /** Bir günün saat listesi; toplu işlemler ve kopyalama bunu kullanır. */
+  const timesFor = useCallback((dateKey: string): string[] => {
+    const entry = workingHours.find(item => item.weekday === weekdayOf(dateKey));
+    if (entry?.closed) return [];
+    return timeOptions(entry?.start_minute, entry?.end_minute);
+  }, [workingHours]);
+
+  async function saveWorkingHours(hours: WorkingHours[]) {
+    setHoursBusy(true); setHoursError('');
+    try {
+      const result = await api<{ hours: WorkingHours[] }>('/api/admin/working-hours', {
+        method: 'PUT',
+        body: JSON.stringify({
+          hours: hours.map(entry => ({
+            weekday: entry.weekday,
+            startMinute: entry.start_minute,
+            endMinute: entry.end_minute,
+            closed: entry.closed
+          }))
+        })
+      }, csrf);
+      setWorkingHours(result.hours);
+      setHoursOpen(false);
+      notify('Çalışma saatleri güncellendi.');
+      await loadData();
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 401) guard(err);
+      else setHoursError(err instanceof Error ? err.message : 'Kaydedilemedi.');
+    } finally { setHoursBusy(false); }
+  }
 
   function stateFor(start: number): { state: SlotState; appointment?: Appointment; block?: AvailabilityBlock } {
     const appointment = data.monthAppointments.find(item => item.start_at === start && ACTIVE_STATUSES.includes(item.status));
@@ -426,7 +474,7 @@ function AdminDashboard({ csrf, onExpired }: { csrf: string; onExpired: () => vo
 
   /** Bir günün değiştirilebilir saatleri için hedef durumu hesaplar; değişmeyenleri eler. */
   function daySlotChanges(dateKey: string, target: (startAt: number) => boolean): SlotChange[] {
-    return timeOptions().flatMap(time => {
+    return timesFor(dateKey).flatMap(time => {
       const startAt = toTimestamp(dateKey, time);
       const state = stateFor(startAt).state;
       if (LOCKED_STATES.includes(state)) return [];
@@ -437,7 +485,7 @@ function AdminDashboard({ csrf, onExpired }: { csrf: string; onExpired: () => vo
 
   /** Saat satırına tıklama. Shift ile önceki tıklamadan buraya kadarki aralık uygulanır. */
   function onSlotClick(time: string, shiftKey: boolean) {
-    const times = timeOptions();
+    const times = dayTimes;
     const index = times.indexOf(time);
     const start = toTimestamp(selectedDate, time);
     const open = stateFor(start).state !== 'open';
@@ -467,7 +515,7 @@ function AdminDashboard({ csrf, onExpired }: { csrf: string; onExpired: () => vo
    */
   function planCopy(weekdays: Set<number>): { days: string[]; changes: SlotChange[] } {
     const sourceOpen = new Set(
-      timeOptions().filter(time => stateFor(toTimestamp(selectedDate, time)).state === 'open')
+      dayTimes.filter(time => stateFor(toTimestamp(selectedDate, time)).state === 'open')
     );
     const days: string[] = [];
     const changes: SlotChange[] = [];
@@ -629,7 +677,11 @@ function AdminDashboard({ csrf, onExpired }: { csrf: string; onExpired: () => vo
     <div className="admin-page">
       <header className="admin-header">
         <a className="brand" href="/">CEM<span>.</span>AVAT <small>Yönetim</small></a>
-        <div><button type="button" onClick={refreshAll}><RefreshCw size={16} /> Yenile</button><button type="button" onClick={logout}><LogOut size={16} /> Çıkış</button></div>
+        <div>
+          <button type="button" onClick={() => setHoursOpen(true)}><Clock size={16} /> Çalışma saatleri</button>
+          <button type="button" onClick={refreshAll}><RefreshCw size={16} /> Yenile</button>
+          <button type="button" onClick={logout}><LogOut size={16} /> Çıkış</button>
+        </div>
       </header>
       <main className="admin-content">
         <div className="admin-title"><div><span className="eyebrow">Müsaitlik planı</span><h1>Takvim</h1><p>Branşı, günü ve saati seçerek randevuya açın veya kapatın.</p></div><div className="legend"><span className="open">Açık</span><span className="pending">Bekliyor</span><span className="approved">Onaylı</span></div></div>
@@ -657,13 +709,21 @@ function AdminDashboard({ csrf, onExpired }: { csrf: string; onExpired: () => vo
           <section className="admin-times-panel">
             <header className="times-heading"><div><h2>{formatSelectedDate(selectedDate)}</h2><span>{selectedService?.name}</span></div><TimeFormatToggle use24Hour={use24Hour} onChange={setUse24Hour} /></header>
             <div className="day-actions">
-              <button type="button" disabled={loading} onClick={() => setWholeDay(true)}><CheckCheck size={14} /> Tümünü aç</button>
-              <button type="button" disabled={loading} onClick={() => setWholeDay(false)}><Ban size={14} /> Tümünü kapat</button>
-              <button type="button" disabled={loading} onClick={() => setCopying(true)}><CopyIcon size={14} /> Kopyala</button>
+              <button type="button" disabled={loading || dayClosed} onClick={() => setWholeDay(true)}><CheckCheck size={14} /> Tümünü aç</button>
+              <button type="button" disabled={loading || dayClosed} onClick={() => setWholeDay(false)}><Ban size={14} /> Tümünü kapat</button>
+              <button type="button" disabled={loading || dayClosed} onClick={() => setCopying(true)}><CopyIcon size={14} /> Kopyala</button>
             </div>
             <p className="day-hint">Aralık seçmek için bir saate, sonra <kbd>Shift</kbd> ile ikinci saate tıklayın.</p>
             <div className="admin-time-list">
-              {loading ? <div className="panel-state"><LoaderCircle className="spin" /> Takvim yükleniyor…</div> : timeOptions().map(time => {
+              {loading ? <div className="panel-state"><LoaderCircle className="spin" /> Takvim yükleniyor…</div>
+                : dayClosed ? (
+                  <div className="panel-state closed-day">
+                    <CalendarOff size={20} />
+                    <strong>Bu gün çalışma dışı</strong>
+                    <p>Çalışma saatlerinden açabilirsiniz.</p>
+                    <button type="button" onClick={() => setHoursOpen(true)}>Çalışma saatleri</button>
+                  </div>
+                ) : dayTimes.map(time => {
                 const start = toTimestamp(selectedDate, time);
                 const info = stateFor(start);
                 const busy = busySlots.has(start);
@@ -730,6 +790,15 @@ function AdminDashboard({ csrf, onExpired }: { csrf: string; onExpired: () => vo
           onConfirm={createBlock}
         />
       )}
+      {hoursOpen && (
+        <WorkingHoursModal
+          initial={workingHours}
+          busy={hoursBusy}
+          error={hoursError}
+          onClose={() => { if (!hoursBusy) { setHoursOpen(false); setHoursError(''); } }}
+          onConfirm={saveWorkingHours}
+        />
+      )}
       {form && (
         <AppointmentFormModal
           form={form}
@@ -744,7 +813,7 @@ function AdminDashboard({ csrf, onExpired }: { csrf: string; onExpired: () => vo
         <CopyDayModal
           sourceDate={selectedDate}
           month={month}
-          sourceOpenCount={timeOptions().filter(time => stateFor(toTimestamp(selectedDate, time)).state === 'open').length}
+          sourceOpenCount={dayTimes.filter(time => stateFor(toTimestamp(selectedDate, time)).state === 'open').length}
           plan={planCopy}
           busy={busySlots.size > 0}
           onClose={() => setCopying(false)}
@@ -979,6 +1048,105 @@ function BlockSection({ blocks, month, loading, use24Hour, onAdd, onRemove }: {
         ))}
       </div>
     </section>
+  );
+}
+
+const WEEKDAY_NAMES = ['Pazar', 'Pazartesi', 'Salı', 'Çarşamba', 'Perşembe', 'Cuma', 'Cumartesi'];
+/** Pencere sınırları için 30 dakikalık seçenekler; bitiş 24:00'a kadar çıkabilir. */
+const HOUR_CHOICES = Array.from({ length: 49 }, (_, index) => index * 30);
+
+function WorkingHoursModal({ initial, busy, error, onClose, onConfirm }: {
+  initial: WorkingHours[];
+  busy: boolean;
+  error: string;
+  onClose: () => void;
+  onConfirm: (hours: WorkingHours[]) => void;
+}) {
+  const [hours, setHours] = useState<WorkingHours[]>(() =>
+    WEEKDAY_NAMES.map((_, weekday) =>
+      initial.find(entry => entry.weekday === weekday)
+        ?? { weekday, start_minute: 8 * 60, end_minute: 22 * 60, closed: false })
+  );
+  const dialogRef = useModalShell(busy, onClose);
+
+  const update = (weekday: number, patch: Partial<WorkingHours>) =>
+    setHours(current => current.map(entry => entry.weekday === weekday ? { ...entry, ...patch } : entry));
+
+  // Pazartesi'den başlayan gösterim sırası; veri 0 = Pazar olarak saklanır.
+  const ordered = [1, 2, 3, 4, 5, 6, 0].map(weekday => hours.find(entry => entry.weekday === weekday)!);
+  const invalid = hours.find(entry => !entry.closed && entry.start_minute >= entry.end_minute);
+  const localError = invalid ? `${WEEKDAY_NAMES[invalid.weekday]} için bitiş, başlangıçtan sonra olmalıdır.` : '';
+
+  /** Bir günün penceresini diğer tüm açık günlere uygular. */
+  const applyToAll = (source: WorkingHours) =>
+    setHours(current => current.map(entry =>
+      entry.weekday === source.weekday
+        ? entry
+        : { ...entry, start_minute: source.start_minute, end_minute: source.end_minute }));
+
+  return (
+    <div className="decision-backdrop" onMouseDown={event => { if (event.target === event.currentTarget && !busy) onClose(); }}>
+      <div className="decision-modal hours-modal" role="dialog" aria-modal="true" aria-labelledby="hours-title" tabIndex={-1} ref={dialogRef}>
+        <header className="decision-header">
+          <span className="decision-icon"><Clock /></span>
+          <div><span className="eyebrow">Müsaitlik planı</span><h2 id="hours-title">Çalışma saatleri</h2></div>
+          <button type="button" className="decision-close" aria-label="Pencereyi kapat" disabled={busy} onClick={onClose}><X size={18} /></button>
+        </header>
+        <p className="decision-description">
+          Takvimde hangi saatlerin görüneceğini belirler. Bu aralığın dışında kalan saatler,
+          daha önce açılmış olsalar bile danışanlara sunulmaz.
+        </p>
+
+        <div className="hours-grid">
+          {ordered.map(entry => (
+            <div className={`hours-row${entry.closed ? ' closed' : ''}`} key={entry.weekday}>
+              <label className="hours-day">
+                <input
+                  type="checkbox"
+                  checked={!entry.closed}
+                  aria-label={`${WEEKDAY_NAMES[entry.weekday]} açık`}
+                  onChange={event => update(entry.weekday, { closed: !event.target.checked })}
+                />
+                <span>{WEEKDAY_NAMES[entry.weekday]}</span>
+              </label>
+              {entry.closed ? (
+                <span className="hours-closed">Kapalı</span>
+              ) : (
+                <>
+                  <select
+                    value={entry.start_minute}
+                    aria-label={`${WEEKDAY_NAMES[entry.weekday]} başlangıç`}
+                    onChange={event => update(entry.weekday, { start_minute: Number(event.target.value) })}
+                  >
+                    {HOUR_CHOICES.slice(0, -1).map(minute => <option key={minute} value={minute}>{minuteLabel(minute)}</option>)}
+                  </select>
+                  <span className="hours-dash">–</span>
+                  <select
+                    value={entry.end_minute}
+                    aria-label={`${WEEKDAY_NAMES[entry.weekday]} bitiş`}
+                    onChange={event => update(entry.weekday, { end_minute: Number(event.target.value) })}
+                  >
+                    {HOUR_CHOICES.slice(1).map(minute => <option key={minute} value={minute}>{minuteLabel(minute === 1440 ? 1439 : minute).replace('23:59', '24:00')}</option>)}
+                  </select>
+                  <button type="button" className="hours-apply" title="Bu saatleri diğer günlere uygula" onClick={() => applyToAll(entry)}>
+                    <CopyIcon size={13} />
+                  </button>
+                </>
+              )}
+            </div>
+          ))}
+        </div>
+
+        {(localError || error) && <div className="inline-error">{localError || error}</div>}
+
+        <footer className="decision-actions">
+          <button type="button" className="decision-secondary" disabled={busy} onClick={onClose}>Vazgeç</button>
+          <button type="button" className="decision-primary" disabled={busy || !!localError} onClick={() => onConfirm(hours)}>
+            {busy ? <><LoaderCircle className="spin" size={16} /> Kaydediliyor…</> : 'Kaydet'}
+          </button>
+        </footer>
+      </div>
+    </div>
   );
 }
 

@@ -18,7 +18,7 @@ use tower_http::services::ServeDir;
 use tower_http::set_header::SetResponseHeaderLayer;
 
 use crate::config::{BOOKING_RULES, Config, SERVICES, app_root, service_name};
-use crate::db::{AdminSession, AppointmentQuery, Db, NewAppointment, SlotChange};
+use crate::db::{AdminSession, AppointmentQuery, Db, NewAppointment, SlotChange, WorkingHours};
 use crate::email::EmailService;
 use crate::error::AppError;
 use crate::time::{
@@ -114,6 +114,10 @@ pub fn build_router(state: AppState) -> Router {
         .route(
             "/api/admin/availability-slots",
             get(admin_list_slots).put(admin_set_slot),
+        )
+        .route(
+            "/api/admin/working-hours",
+            get(admin_list_working_hours).put(admin_set_working_hours),
         )
         .route(
             "/api/admin/availability-slots/bulk",
@@ -769,6 +773,72 @@ async fn admin_decide_appointment(
 /// `from`/`to` verilmezse varsayılan pencere bugünden itibaren 90 gündür.
 /// Admin takvimi başka bir aya gittiğinde o ayın aralığını göndererek
 /// kapalı zamanları da o aya göre alır.
+async fn admin_list_working_hours(State(state): State<AppState>) -> Result<Json<Value>, AppError> {
+    let db = state.db.clone();
+    let hours = blocking(move || db.list_working_hours()).await?;
+    Ok(Json(json!({ "hours": hours })))
+}
+
+async fn admin_set_working_hours(
+    State(state): State<AppState>,
+    body: Bytes,
+) -> Result<Json<Value>, AppError> {
+    let payload = parse_json(&body)?;
+    let entries = payload
+        .get("hours")
+        .and_then(Value::as_array)
+        .filter(|entries| entries.len() == 7)
+        .ok_or_else(|| AppError::validation("Yedi günün tamamı gönderilmelidir."))?;
+
+    let mut hours = Vec::with_capacity(7);
+    let mut seen = [false; 7];
+    for entry in entries {
+        let weekday = entry.get("weekday").and_then(Value::as_i64).unwrap_or(-1);
+        if !(0..=6).contains(&weekday) {
+            return Err(AppError::validation("Geçersiz gün."));
+        }
+        if std::mem::replace(&mut seen[weekday as usize], true) {
+            return Err(AppError::validation(
+                "Aynı gün birden fazla kez gönderildi.",
+            ));
+        }
+
+        let start_minute = entry
+            .get("startMinute")
+            .and_then(Value::as_i64)
+            .unwrap_or(-1);
+        let end_minute = entry.get("endMinute").and_then(Value::as_i64).unwrap_or(-1);
+        // Pencere, slot ızgarasıyla hizalı olmalı; aksi halde üretilen saatler
+        // yayınlanabilir saatlerle örtüşmezdi.
+        let step = BOOKING_RULES.slot_step_minutes;
+        if start_minute < 0
+            || end_minute > 24 * 60
+            || start_minute >= end_minute
+            || start_minute % step != 0
+            || end_minute % step != 0
+        {
+            return Err(AppError::validation(
+                "Çalışma saatleri 30 dakikalık dilimlerle ve başlangıç bitişten önce olmalıdır.",
+            ));
+        }
+
+        hours.push(WorkingHours {
+            weekday,
+            start_minute,
+            end_minute,
+            closed: entry.get("closed") == Some(&Value::Bool(true)),
+        });
+    }
+
+    let db = state.db.clone();
+    let saved = blocking(move || {
+        db.set_working_hours(&hours)?;
+        db.list_working_hours()
+    })
+    .await?;
+    Ok(Json(json!({ "hours": saved })))
+}
+
 async fn admin_list_blocks(
     State(state): State<AppState>,
     Query(params): Query<HashMap<String, String>>,
@@ -952,12 +1022,18 @@ pub fn build_availability(db: &Db, service_id: &str, now: i64) -> Result<Value, 
 
     let busy = db.get_busy_ranges(now, horizon + DAY_MS, now)?;
     let published = db.list_availability_slots(service_id, now, horizon + DAY_MS)?;
+    // Çalışma penceresi dış zarftır: yönetici bir günü kapattığında ya da saatleri
+    // daralttığında, o aralıkta daha önce yayınlanmış saatler de sunulmaz.
+    // Slot kayıtları silinmediği için pencere yeniden genişletilirse geri gelirler.
+    let working: Vec<crate::db::WorkingHours> = db.list_working_hours()?;
 
     let mut days = Vec::new();
     for offset in 0..=BOOKING_RULES.horizon_days {
         let local_midnight = utc_ms(year, month0, day + offset);
         let day_start = local_midnight - BOOKING_RULES.offset_ms();
         let day_end = day_start + DAY_MS;
+        let weekday = civil_from_ms(local_midnight).weekday as i64;
+        let window = working.iter().find(|entry| entry.weekday == weekday);
 
         let mut slots: Vec<(i64, Value)> = published
             .iter()
@@ -965,6 +1041,10 @@ pub fn build_availability(db: &Db, service_id: &str, now: i64) -> Result<Value, 
             .filter_map(|slot| {
                 let start = slot.start_at;
                 if start < min_start || start > horizon {
+                    return None;
+                }
+                let minute_of_day = (start - day_start) / 60_000;
+                if !window.is_some_and(|entry| entry.covers(minute_of_day)) {
                     return None;
                 }
                 // Randevunun kendi tamponu kadar sonrası da korunur.

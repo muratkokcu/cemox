@@ -1321,3 +1321,185 @@ async fn admin_can_edit_and_reschedule_an_appointment() {
         assert_eq!(response.body["error"]["message"], message);
     }
 }
+
+#[tokio::test]
+async fn working_hours_bound_what_clients_are_offered() {
+    let server = common::start().await;
+    let (cookie, csrf) = server.login().await;
+    let headers = [("Cookie", cookie.as_str()), ("x-csrf-token", csrf.as_str())];
+    let read = [("Cookie", cookie.as_str())];
+
+    // Varsayılan pencere eski sabit davranışla aynı olmalı: her gün 08:00–22:00.
+    let defaults = server
+        .request(Method::GET, "/api/admin/working-hours", &read, None)
+        .await;
+    assert_eq!(defaults.status, 200);
+    let hours = defaults.body["hours"].as_array().unwrap();
+    assert_eq!(hours.len(), 7);
+    for (index, entry) in hours.iter().enumerate() {
+        assert_eq!(entry["weekday"], index as i64);
+        assert_eq!(entry["start_minute"], 480);
+        assert_eq!(entry["end_minute"], 1320);
+        assert_eq!(entry["closed"], false);
+    }
+
+    // Hafta içi bir güne, çalışma penceresi içinde ve dışında birer saat yayınla.
+    let now = now_ms();
+    let local = civil_from_ms(now + BOOKING_RULES.offset_ms());
+    let slot = |day: i64, hour: i64| -> i64 {
+        utc_ms_hm(
+            local.year,
+            local.month as i64 - 1,
+            local.day as i64 + day,
+            hour,
+            0,
+        ) - BOOKING_RULES.offset_ms()
+    };
+    // Hafta sonuna denk gelmeyen bir gün seç; pencere gün bazlı kapatılacak.
+    let mut day_offset = 3;
+    while civil_from_ms(slot(day_offset, 0) + BOOKING_RULES.offset_ms()).weekday == 0 {
+        day_offset += 1;
+    }
+    let weekday = civil_from_ms(slot(day_offset, 0) + BOOKING_RULES.offset_ms()).weekday as i64;
+
+    for hour in [9, 20] {
+        let response = server
+            .request(
+                Method::PUT,
+                "/api/admin/availability-slots",
+                &headers,
+                Some(json!({
+                    "serviceId": "medical-fitness",
+                    "start": to_iso_string(slot(day_offset, hour)),
+                    "open": true
+                })),
+            )
+            .await;
+        assert_eq!(response.status, 200, "{:?}", response.body);
+    }
+
+    let offered = async || -> Vec<String> {
+        slot_starts(
+            &server
+                .get("/api/availability?service=medical-fitness")
+                .await
+                .body,
+        )
+    };
+    let all = offered().await;
+    assert!(
+        all.contains(&to_iso_string(slot(day_offset, 9))),
+        "09:00 sunulmalı"
+    );
+    assert!(
+        all.contains(&to_iso_string(slot(day_offset, 20))),
+        "20:00 sunulmalı"
+    );
+
+    // Pencereyi daralt: 08:00–18:00. Yayınlanmış 20:00 artık sunulmamalı.
+    let mut window: Vec<Value> = (0..7)
+        .map(
+            |day| json!({ "weekday": day, "startMinute": 480, "endMinute": 1080, "closed": false }),
+        )
+        .collect();
+    let narrowed = server
+        .request(
+            Method::PUT,
+            "/api/admin/working-hours",
+            &headers,
+            Some(json!({ "hours": window })),
+        )
+        .await;
+    assert_eq!(narrowed.status, 200, "{:?}", narrowed.body);
+
+    let after = offered().await;
+    assert!(
+        after.contains(&to_iso_string(slot(day_offset, 9))),
+        "09:00 hâlâ sunulmalı"
+    );
+    assert!(
+        !after.contains(&to_iso_string(slot(day_offset, 20))),
+        "pencere dışındaki yayınlanmış saat sunulmamalı"
+    );
+
+    // Günü tamamen kapat: o günün tüm saatleri düşer.
+    window[weekday as usize] =
+        json!({ "weekday": weekday, "startMinute": 480, "endMinute": 1080, "closed": true });
+    server
+        .request(
+            Method::PUT,
+            "/api/admin/working-hours",
+            &headers,
+            Some(json!({ "hours": window.clone() })),
+        )
+        .await;
+    let closed_day = offered().await;
+    assert!(
+        !closed_day.contains(&to_iso_string(slot(day_offset, 9))),
+        "kapalı günde hiçbir saat sunulmamalı"
+    );
+
+    // Pencere yeniden genişletilince saatler geri gelir: slot kayıtları silinmez.
+    window[weekday as usize] =
+        json!({ "weekday": weekday, "startMinute": 480, "endMinute": 1320, "closed": false });
+    server
+        .request(
+            Method::PUT,
+            "/api/admin/working-hours",
+            &headers,
+            Some(json!({ "hours": window })),
+        )
+        .await;
+    let restored = offered().await;
+    assert!(restored.contains(&to_iso_string(slot(day_offset, 9))));
+    assert!(
+        restored.contains(&to_iso_string(slot(day_offset, 20))),
+        "geri gelmeli"
+    );
+
+    // Doğrulamalar.
+    let seven = |start: i64, end: i64| -> Value {
+        json!({ "hours": (0..7).map(|d| json!({ "weekday": d, "startMinute": start, "endMinute": end, "closed": false })).collect::<Vec<_>>() })
+    };
+    for (body, message) in [
+        (json!({ "hours": [] }), "Yedi günün tamamı gönderilmelidir."),
+        (
+            seven(1080, 480),
+            "Çalışma saatleri 30 dakikalık dilimlerle ve başlangıç bitişten önce olmalıdır.",
+        ),
+        (
+            seven(485, 1080),
+            "Çalışma saatleri 30 dakikalık dilimlerle ve başlangıç bitişten önce olmalıdır.",
+        ),
+        (
+            seven(480, 1500),
+            "Çalışma saatleri 30 dakikalık dilimlerle ve başlangıç bitişten önce olmalıdır.",
+        ),
+        (
+            json!({ "hours": (0..7).map(|_| json!({ "weekday": 0, "startMinute": 480, "endMinute": 1080, "closed": false })).collect::<Vec<_>>() }),
+            "Aynı gün birden fazla kez gönderildi.",
+        ),
+    ] {
+        let response = server
+            .request(
+                Method::PUT,
+                "/api/admin/working-hours",
+                &headers,
+                Some(body),
+            )
+            .await;
+        assert_eq!(response.status, 400, "{:?}", response.body);
+        assert_eq!(response.body["error"]["message"], message);
+    }
+
+    // CSRF olmadan değiştirilemez.
+    let no_csrf = server
+        .request(
+            Method::PUT,
+            "/api/admin/working-hours",
+            &read,
+            Some(seven(480, 1080)),
+        )
+        .await;
+    assert_eq!(no_csrf.status, 403);
+}

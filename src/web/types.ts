@@ -42,3 +42,11 @@ export type AvailabilityBlock = {
   end_at: number;
   reason: string;
 };
+
+export type WorkingHours = {
+  /** 0 = Pazar … 6 = Cumartesi. */
+  weekday: number;
+  start_minute: number;
+  end_minute: number;
+  closed: boolean;
+};

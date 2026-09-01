@@ -35,6 +35,10 @@ pub const STATUSES: [&str; 6] = [
     "CONFLICT",
 ];
 
+/// 08:00 ve 22:00; çalışma saatleri ayarlanana kadar geçerli varsayılan.
+const DEFAULT_START_MINUTE: i64 = 8 * 60;
+const DEFAULT_END_MINUTE: i64 = 22 * 60;
+
 const APPOINTMENT_COLUMNS: &str = "id, service_id, service_name, start_at, end_at, name, email, phone, \
      note, status, hold_expires_at, created_at, decision_at, admin_note";
 
@@ -133,6 +137,23 @@ pub struct AppointmentPage {
     pub total: i64,
     /// Durum filtresi hariç, duruma göre dağılım; sekme sayaçlarını besler.
     pub counts: BTreeMap<String, i64>,
+}
+
+/// Günün çalışma penceresi. Dakikalar yerel gün başından sayılır.
+#[derive(Debug, Clone, Serialize)]
+pub struct WorkingHours {
+    /// 0 = Pazar … 6 = Cumartesi (`Date.getUTCDay()` ile aynı).
+    pub weekday: i64,
+    pub start_minute: i64,
+    pub end_minute: i64,
+    pub closed: bool,
+}
+
+impl WorkingHours {
+    /// Verilen yerel dakika bu günün penceresinde mi?
+    pub fn covers(&self, minute_of_day: i64) -> bool {
+        !self.closed && minute_of_day >= self.start_minute && minute_of_day < self.end_minute
+    }
 }
 
 /// Toplu yazımda tek bir saatin hedef durumu.
@@ -260,6 +281,15 @@ impl Db {
             );
             CREATE INDEX IF NOT EXISTS idx_slots_service_time ON availability_slots(service_id, start_at, end_at);
 
+            -- Haftanın her günü için çalışma penceresi. Yönetici saat listesi bunu
+            -- kullanır; yayınlanmış saatler de bu pencerenin dışına taşamaz.
+            CREATE TABLE IF NOT EXISTS working_hours (
+              weekday INTEGER PRIMARY KEY CHECK(weekday BETWEEN 0 AND 6),
+              start_minute INTEGER NOT NULL,
+              end_minute INTEGER NOT NULL,
+              closed INTEGER NOT NULL DEFAULT 0
+            );
+
             CREATE TABLE IF NOT EXISTS admin_sessions (
               token_hash TEXT PRIMARY KEY,
               csrf_token TEXT NOT NULL,
@@ -269,6 +299,59 @@ impl Db {
             CREATE INDEX IF NOT EXISTS idx_sessions_expiry ON admin_sessions(expires_at);
             "#,
         )?;
+
+        // Varsayılan pencere önceki sabit davranışla aynı: her gün 08:00–22:00.
+        // `OR IGNORE` sayesinde yeniden başlatmada mevcut ayarlar korunur.
+        let conn = self.conn()?;
+        for weekday in 0..7 {
+            conn.execute(
+                "INSERT OR IGNORE INTO working_hours (weekday, start_minute, end_minute, closed) \
+                 VALUES (?, ?, ?, 0)",
+                params![weekday, DEFAULT_START_MINUTE, DEFAULT_END_MINUTE],
+            )?;
+        }
+        Ok(())
+    }
+
+    // ---- çalışma saatleri -------------------------------------------------
+
+    pub fn list_working_hours(&self) -> Result<Vec<WorkingHours>, AppError> {
+        let conn = self.conn()?;
+        let mut statement = conn.prepare(
+            "SELECT weekday, start_minute, end_minute, closed FROM working_hours ORDER BY weekday",
+        )?;
+        let rows = statement.query_map([], |row| {
+            Ok(WorkingHours {
+                weekday: row.get(0)?,
+                start_minute: row.get(1)?,
+                end_minute: row.get(2)?,
+                closed: row.get::<_, i64>(3)? != 0,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    /// Yedi günün tamamını tek transaction'da değiştirir.
+    pub fn set_working_hours(&self, hours: &[WorkingHours]) -> Result<(), AppError> {
+        let mut conn = self.conn()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        for entry in hours {
+            tx.execute(
+                "INSERT INTO working_hours (weekday, start_minute, end_minute, closed) \
+                 VALUES (?, ?, ?, ?) \
+                 ON CONFLICT(weekday) DO UPDATE SET \
+                   start_minute = excluded.start_minute, \
+                   end_minute = excluded.end_minute, \
+                   closed = excluded.closed",
+                params![
+                    entry.weekday,
+                    entry.start_minute,
+                    entry.end_minute,
+                    i64::from(entry.closed)
+                ],
+            )?;
+        }
+        tx.commit()?;
         Ok(())
     }
 

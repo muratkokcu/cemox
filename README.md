@@ -7,6 +7,7 @@ Rust (axum + rusqlite) API, SQLite veritabanı.
 
 - Altı hizmet için 20 dakikalık telefon ön görüşmesi
 - Cal.com benzeri ay takvimi ve seçili güne ait dikey saat listesi
+- Gün bazlı çalışma saatleri; panelden ayarlanır, kapalı günler işaretlenir
 - Admin takviminde branş bazında 30 dakikalık saatleri açık/kapalı yapma
 - Günün tamamını tek işlemde açma/kapatma, Shift ile aralık seçimi ve günü hafta günlerine kopyalama
 - React 19, Vite ve Tailwind CSS ile responsive kullanıcı ve yönetim ekranları
@@ -81,7 +82,12 @@ SQLite verisi `cemox-data` volume’unda saklanır. Üretimde uygulamanın önü
 
 ## Randevu kuralları
 
-Randevu süresi, tampon süre, minimum bildirim ve rezervasyon ufku
-[server/src/config.rs](server/src/config.rs) içindeki `BOOKING_RULES` üzerinden yönetilir.
+Çalışma saatleri panelden, gün bazlı olarak ayarlanır (varsayılan: her gün 08:00–22:00).
+Bu pencere dış zarftır: dışında kalan saatler, daha önce açılmış olsalar bile danışanlara
+sunulmaz. Slot kayıtları silinmediği için pencere yeniden genişletildiğinde geri gelirler.
+
+Randevu süresi, tampon süre, minimum bildirim ve rezervasyon ufku hâlâ kodda,
+[server/src/config.rs](server/src/config.rs) içindeki `BOOKING_RULES` üzerindedir —
+bunları değiştirmek mevcut kayıtları etkileyebileceği için panele açılmadı.
 Hizmet adları aynı dosyadaki `SERVICES` listesindedir; branşların açık saatleri admin
 takviminden belirlenir.

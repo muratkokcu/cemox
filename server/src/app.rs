@@ -21,6 +21,7 @@ use crate::config::{BOOKING_RULES, Config, SERVICES, app_root, service_name};
 use crate::db::{AdminSession, AppointmentQuery, Db, NewAppointment, SlotChange, WorkingHours};
 use crate::email::EmailService;
 use crate::error::AppError;
+use crate::export::{csv_export, ics_export};
 use crate::time::{
     DAY_MS, civil_from_ms, format_day, format_time, iso_date, now_ms, parse_timestamp,
     to_iso_string, utc_ms,
@@ -98,6 +99,10 @@ pub fn build_router(state: AppState) -> Router {
         .route(
             "/api/admin/appointments",
             get(admin_list_appointments).post(admin_create_appointment),
+        )
+        .route(
+            "/api/admin/appointments/export",
+            get(admin_export_appointments),
         )
         .route(
             "/api/admin/appointments/{id}",
@@ -518,10 +523,9 @@ async fn admin_logout(
     Ok(response)
 }
 
-async fn admin_list_appointments(
-    State(state): State<AppState>,
-    Query(params): Query<HashMap<String, String>>,
-) -> Result<Json<Value>, AppError> {
+/// Liste ve dışa aktarma aynı filtreleri paylaşır; "ne görüyorsam onu indir"
+/// davranışının tek kaynağı budur.
+fn appointment_query(params: &HashMap<String, String>) -> Result<AppointmentQuery, AppError> {
     let status = params
         .get("status")
         .cloned()
@@ -547,8 +551,8 @@ async fn admin_list_appointments(
 
     // `from`/`to` ikisi birlikte verilir; takvim görünümü gezilen ayı böyle daraltır.
     let (from, to) = match (
-        optional_timestamp(&params, "from", "Başlangıç")?,
-        optional_timestamp(&params, "to", "Bitiş")?,
+        optional_timestamp(params, "from", "Başlangıç")?,
+        optional_timestamp(params, "to", "Bitiş")?,
     ) {
         (None, None) => (0, 0),
         (from, to) => {
@@ -571,16 +575,22 @@ async fn admin_list_appointments(
         return Err(AppError::validation("Arama metni çok uzun."));
     }
 
-    let query = AppointmentQuery {
+    Ok(AppointmentQuery {
         status,
         service_id,
         search,
         from,
         to,
-        limit: parse_count(&params, "limit", 200, 1, 500, "Kayıt sayısı")?,
-        offset: parse_count(&params, "offset", 0, 0, 100_000, "Başlangıç konumu")?,
-    };
+        limit: parse_count(params, "limit", 200, 1, 500, "Kayıt sayısı")?,
+        offset: parse_count(params, "offset", 0, 0, 100_000, "Başlangıç konumu")?,
+    })
+}
 
+async fn admin_list_appointments(
+    State(state): State<AppState>,
+    Query(params): Query<HashMap<String, String>>,
+) -> Result<Json<Value>, AppError> {
+    let query = appointment_query(&params)?;
     let db = state.db.clone();
     let page = blocking(move || db.list_appointments(&query)).await?;
     Ok(Json(json!({
@@ -610,6 +620,56 @@ fn parse_count(
         Ok(count) if (min..=max).contains(&count) => Ok(count),
         _ => Err(AppError::validation(format!("{label} geçerli değil."))),
     }
+}
+
+/// Tek istekte dışa aktarılabilecek en fazla kayıt.
+const MAX_EXPORT_ROWS: i64 = 5_000;
+
+/// Listedeki filtrelerin aynısıyla CSV veya iCal üretir; yönetici ne görüyorsa
+/// onu indirir. Sayfalama uygulanmaz.
+async fn admin_export_appointments(
+    State(state): State<AppState>,
+    Query(params): Query<HashMap<String, String>>,
+) -> Result<Response, AppError> {
+    let format = params.get("format").map(String::as_str).unwrap_or("csv");
+    if !matches!(format, "csv" | "ics") {
+        return Err(AppError::validation("Geçersiz dışa aktarma biçimi."));
+    }
+
+    let mut query = appointment_query(&params)?;
+    query.limit = MAX_EXPORT_ROWS;
+    query.offset = 0;
+
+    let db = state.db.clone();
+    let page = blocking(move || db.list_appointments(&query)).await?;
+
+    let today = iso_date(now_ms() + BOOKING_RULES.offset_ms());
+    let (body, mime, name) = if format == "csv" {
+        (
+            csv_export(&page.appointments),
+            "text/csv; charset=utf-8",
+            format!("randevular-{today}.csv"),
+        )
+    } else {
+        (
+            ics_export(&page.appointments),
+            "text/calendar; charset=utf-8",
+            format!("randevular-{today}.ics"),
+        )
+    };
+
+    Ok((
+        [
+            (header::CONTENT_TYPE, mime.to_string()),
+            (
+                header::CONTENT_DISPOSITION,
+                format!("attachment; filename=\"{name}\""),
+            ),
+            (header::CACHE_CONTROL, "no-store".to_string()),
+        ],
+        body,
+    )
+        .into_response())
 }
 
 /// Panelden girilen randevu alanlarını doğrular. Elle oluşturma ve düzenleme

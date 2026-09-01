@@ -109,6 +109,8 @@ pub async fn start() -> TestServer {
 pub struct ApiResponse {
     pub status: u16,
     pub body: Value,
+    /// JSON olmayan yanıtlar (CSV, iCal) için ham gövde.
+    pub text: String,
     pub set_cookie: Option<String>,
 }
 
@@ -147,6 +149,7 @@ impl TestServer {
         ApiResponse {
             status,
             body,
+            text,
             set_cookie,
         }
     }

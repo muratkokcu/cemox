@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Ban, BellRing, CalendarClock, CalendarOff, Check, CheckCheck, ChevronDown, CircleCheck, CircleX, Clock, Copy as CopyIcon, Hourglass, LoaderCircle, LogOut, Plus, RefreshCw, PencilLine, Search, ShieldCheck, Trash2, TriangleAlert, UserPlus, X } from 'lucide-react';
+import { Ban, BellRing, CalendarClock, CalendarOff, Check, CheckCheck, ChevronDown, CircleCheck, CircleX, CalendarPlus, Clock, Copy as CopyIcon, Download, Hourglass, LoaderCircle, LogOut, Plus, RefreshCw, PencilLine, Search, ShieldCheck, Trash2, TriangleAlert, UserPlus, X } from 'lucide-react';
 import { MonthCalendar } from '../components/MonthCalendar';
 import { TimeFormatToggle } from '../components/TimeFormatToggle';
 import { api, ApiError } from '../web/api';
@@ -902,6 +902,12 @@ function AppointmentSection({ list, loading, moreBusy, filter, search, searching
   onEdit: (appointment: Appointment) => void;
   onCreate: () => void;
 }) {
+  const exportUrl = (format: 'csv' | 'ics') => {
+    const query = new URLSearchParams({ format });
+    if (filter) query.set('status', filter);
+    if (search.trim()) query.set('q', search.trim());
+    return `/api/admin/appointments/export?${query}`;
+  };
   // Tutma süresi dakika çözünürlüğünde gösterildiği için yarım dakikalık tik yeterli.
   const now = useTicker(30_000);
   // "Tümü" sekmesi durum dağılımının toplamıdır; sayaçlar aramaya göre daralır.
@@ -959,6 +965,12 @@ function AppointmentSection({ list, loading, moreBusy, filter, search, searching
       {!loading && list.total > 0 && (
         <footer className="appointment-footer">
           <span>{list.items.length} / {list.total} randevu gösteriliyor</span>
+          <div className="export-links">
+            {/* Bağlantılar o anki filtre ve aramayı taşır: ekranda ne varsa o iner.
+                Oturum çerezi aynı kaynaktaki GET ile birlikte gider. */}
+            <a href={exportUrl('csv')} download><Download size={14} /> CSV</a>
+            <a href={exportUrl('ics')} download><CalendarPlus size={14} /> Takvim</a>
+          </div>
           {list.items.length < list.total && (
             <button type="button" disabled={moreBusy} onClick={onLoadMore}>
               {moreBusy

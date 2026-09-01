@@ -1503,3 +1503,167 @@ async fn working_hours_bound_what_clients_are_offered() {
         .await;
     assert_eq!(no_csrf.status, 403);
 }
+
+#[tokio::test]
+async fn admin_can_export_appointments_as_csv_and_ical() {
+    let server = common::start().await;
+    let (cookie, csrf) = server.login().await;
+    let headers = [("Cookie", cookie.as_str()), ("x-csrf-token", csrf.as_str())];
+    let read = [("Cookie", cookie.as_str())];
+
+    let now = now_ms();
+    let local = civil_from_ms(now + BOOKING_RULES.offset_ms());
+    let slot = |day: i64, hour: i64| -> i64 {
+        utc_ms_hm(
+            local.year,
+            local.month as i64 - 1,
+            local.day as i64 + day,
+            hour,
+            0,
+        ) - BOOKING_RULES.offset_ms()
+    };
+
+    // Ayırıcı, tırnak ve satır sonu içeren bir not; kaçırma bunları bozmamalı.
+    server
+        .request(
+            Method::POST,
+            "/api/admin/appointments",
+            &headers,
+            Some(json!({
+                "serviceId": "medical-fitness", "start": to_iso_string(slot(2, 14)),
+                "name": "Şule Öztürk", "phone": "+905551112233",
+                "email": "sule@example.com",
+                "note": "Sırt; bel ve \"omuz\" ağrısı"
+            })),
+        )
+        .await;
+    server
+        .request(
+            Method::POST,
+            "/api/admin/appointments",
+            &headers,
+            Some(json!({
+                "serviceId": "kisisel-antrenman", "start": to_iso_string(slot(3, 10)),
+                "name": "Ahmet Çağlar", "phone": "+905324445566"
+            })),
+        )
+        .await;
+
+    let export = async |query: &str| -> common::ApiResponse {
+        server
+            .request(
+                Method::GET,
+                &format!("/api/admin/appointments/export{query}"),
+                &read,
+                None,
+            )
+            .await
+    };
+
+    // ---- CSV ----
+    let csv = export("?format=csv").await;
+    assert_eq!(csv.status, 200);
+    let text = csv.text.clone();
+    assert!(
+        text.starts_with('\u{feff}'),
+        "Excel'in Türkçe karakterleri okuması için BOM gerekir"
+    );
+    let lines: Vec<&str> = text.trim_end().split("\r\n").collect();
+    assert_eq!(lines.len(), 3, "başlık + iki kayıt");
+    assert!(
+        lines[0].contains("Ad soyad;Telefon"),
+        "ayırıcı ';' olmalı: {}",
+        lines[0]
+    );
+    assert!(text.contains("Şule Öztürk"), "Türkçe karakterler korunmalı");
+    assert!(
+        text.contains("\"Sırt; bel ve \"\"omuz\"\" ağrısı\""),
+        "ayırıcı ve tırnak içeren alan kaçırılmalı: {text}"
+    );
+    assert!(text.contains("Onaylandı"), "durum Türkçe yazılmalı");
+
+    // ---- iCal ----
+    let ics = export("?format=ics").await;
+    assert_eq!(ics.status, 200);
+    let calendar = ics.text.clone();
+    assert!(calendar.starts_with("BEGIN:VCALENDAR\r\n"));
+    assert!(calendar.trim_end().ends_with("END:VCALENDAR"));
+    assert_eq!(calendar.matches("BEGIN:VEVENT").count(), 2);
+    assert_eq!(
+        calendar.matches("STATUS:CONFIRMED").count(),
+        2,
+        "elle giriş onaylıdır"
+    );
+    assert!(calendar.contains(&format!("DTSTART:{}", {
+        let civil = civil_from_ms(slot(2, 14));
+        format!(
+            "{:04}{:02}{:02}T{:02}{:02}{:02}Z",
+            civil.year, civil.month, civil.day, civil.hour, civil.minute, civil.second
+        )
+    })));
+    // RFC 5545: hiçbir satır 75 okteti aşmamalı.
+    for line in calendar.split("\r\n") {
+        assert!(
+            line.len() <= 75,
+            "katlanmamış satır ({} bayt): {line}",
+            line.len()
+        );
+    }
+    // İçerik katlanmış satırlara bölünmüş olabilir; RFC 5545'e göre "\r\n " dizisi
+    // kaldırılarak geri açılır ve ancak sonra aranır.
+    let unfolded = calendar.replace("\r\n ", "");
+    assert!(
+        unfolded.contains(r#"Sırt\; bel ve "omuz" ağrısı"#),
+        "iCal metni kaçırılmalı: {unfolded}"
+    );
+    assert!(
+        unfolded.contains("SUMMARY:Şule Öztürk · Medical Fitness"),
+        "başlık korunmalı"
+    );
+    assert!(unfolded.contains("Telefon: +905551112233"));
+
+    // ---- filtreler dışa aktarmaya da uygulanır ----
+    let filtered = export("?format=csv&service=kisisel-antrenman").await;
+    assert_eq!(
+        filtered.text.trim_end().split("\r\n").count(),
+        2,
+        "başlık + tek kayıt"
+    );
+    assert!(filtered.text.contains("Ahmet"));
+    assert!(!filtered.text.contains("Şule"));
+
+    let searched = export("?format=csv&q=sule").await;
+    assert!(
+        searched.text.contains("Şule Öztürk"),
+        "arama katlaması burada da geçerli"
+    );
+    assert!(!searched.text.contains("Ahmet"));
+
+    let empty = export("?format=csv&status=REJECTED").await;
+    assert_eq!(
+        empty.text.trim_end().split("\r\n").count(),
+        1,
+        "yalnızca başlık"
+    );
+
+    // ---- doğrulama ve yetki ----
+    let bad_format = export("?format=pdf").await;
+    assert_eq!(bad_format.status, 400);
+    assert_eq!(
+        bad_format.body["error"]["message"],
+        "Geçersiz dışa aktarma biçimi."
+    );
+
+    let bad_filter = export("?format=csv&status=BOZUK").await;
+    assert_eq!(bad_filter.status, 400);
+
+    let anonymous = server
+        .request(
+            Method::GET,
+            "/api/admin/appointments/export?format=csv",
+            &[],
+            None,
+        )
+        .await;
+    assert_eq!(anonymous.status, 401, "dışa aktarma oturum ister");
+}

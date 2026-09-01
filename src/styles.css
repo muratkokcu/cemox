@@ -229,21 +229,28 @@ a { color: inherit; text-decoration: none; }
 .admin-scheduler .day-cell.selected { color: white; background: #252825; }
 .admin-times-panel { padding-right: 14px; }
 .admin-time-list { height: 570px; }
-.admin-time-row { width: 100%; min-height: 49px; display: grid; grid-template-columns: 70px 1fr auto; align-items: center; gap: 8px; margin-bottom: 7px; padding: 7px 11px; border: 1px solid #dedfdb; border-radius: 8px; color: #272a26; background: white; text-align: left; cursor: pointer; }
+/* Satır iki eylem taşır: müsaitliği aç/kapat ve o saate elle randevu ekle.
+   Bu yüzden kapsayıcı bir div, eylemler içindeki butonlardır. */
+.admin-time-row { min-height: 49px; display: grid; grid-template-columns: 1fr auto; align-items: stretch; margin-bottom: 7px; border: 1px solid #dedfdb; border-radius: 8px; background: white; overflow: hidden; }
+.time-main { display: grid; grid-template-columns: 70px 1fr auto; align-items: center; gap: 8px; padding: 7px 11px; border: 0; color: #272a26; background: transparent; font: inherit; text-align: left; cursor: pointer; }
+.time-main:disabled { cursor: default; }
+.time-add { display: grid; place-items: center; width: 34px; padding: 0; border: 0; color: #b9bdb6; background: transparent; cursor: pointer; transition: color .12s, background .12s; }
+.admin-time-row:hover .time-add { color: var(--green); }
+.time-add:hover, .time-add:focus-visible { color: white; background: var(--green); }
 .admin-time-row strong { font-size: 12px; font-variant-numeric: tabular-nums; }
-.admin-time-row > span { overflow: hidden; color: var(--muted); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.time-main > span { overflow: hidden; color: var(--muted); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 .admin-time-row i { position: relative; width: 34px; height: 19px; border-radius: 12px; background: #d7d9d4; transition: background .15s; }
 .admin-time-row i b { position: absolute; top: 3px; left: 3px; width: 13px; height: 13px; border-radius: 50%; background: white; box-shadow: 0 1px 3px rgba(0,0,0,.15); transition: left .15s; }
 .admin-time-row.open { border-color: #b9cebf; background: #f2f7f3; }
-.admin-time-row.open > span { color: var(--green); }
+.admin-time-row.open .time-main > span { color: var(--green); }
 .admin-time-row.open i { background: #4c966a; }
 .admin-time-row.open i b { left: 18px; }
 .admin-time-row.pending { border-color: #efdcae; background: var(--amber-soft); }
 .admin-time-row.approved { border-color: #b8d1c0; background: var(--green-soft); }
 .admin-time-row.blocked { border-color: #eccdca; background: var(--red-soft); }
 .admin-time-row.past { opacity: .5; }
-.admin-time-row:disabled { cursor: default; }
-.admin-time-row:not(:disabled):hover { border-color: #929a93; }
+/* Yalnızca değiştirilebilir satırlar vurgulanır; dolu ve geçmiş satırlar tepkisizdir. */
+.admin-time-row.open:hover, .admin-time-row.closed:hover { border-color: #929a93; }
 .appointment-section { margin-top: 24px; padding: 25px; background: white; border: 1px solid var(--line); border-radius: 13px; }
 .appointment-section > header { display: flex; align-items: end; justify-content: space-between; gap: 20px; margin-bottom: 20px; }
 .appointment-section h2 { margin: 5px 0 0; font-size: 21px; }

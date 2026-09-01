@@ -544,11 +544,14 @@ function AdminDashboard({ csrf, onExpired }: { csrf: string; onExpired: () => vo
     } finally { setBlockBusy(false); }
   }
 
-  /** Modalı seçili gün ve branşla ön doldurarak açar. */
-  function openManual() {
+  /**
+   * Modalı seçili gün ve branşla ön doldurarak açar. Saat listesinden çağrıldığında
+   * o saat de gelir, böylece tarih/saat seçimi yapmadan doğrudan yazmaya başlanır.
+   */
+  function openManual(time = '10:00') {
     setManualError('');
     setManual({
-      serviceId, date: selectedDate, time: '10:00',
+      serviceId, date: selectedDate, time,
       name: '', phone: '', email: '', note: ''
     });
   }
@@ -628,12 +631,26 @@ function AdminDashboard({ csrf, onExpired }: { csrf: string; onExpired: () => vo
                 const busy = busySlots.has(start);
                 const locked = ['pending', 'approved', 'blocked', 'past'].includes(info.state);
                 const label = { open: 'Açık', closed: 'Kapalı', pending: 'Onay bekliyor', approved: 'Onaylandı', blocked: 'Genel kapalı', past: 'Geçmiş' }[info.state];
+                // Yalnızca boş ve gelecekteki saatlere elle randevu girilebilir;
+                // dolu, kapalı zaman ve geçmiş satırlarda buton gösterilmez.
+                const bookable = info.state === 'open' || info.state === 'closed';
                 return (
-                  <button type="button" className={`admin-time-row ${info.state}${anchorTime === time ? ' anchor' : ''}`} key={time} disabled={locked || busy} onClick={event => onSlotClick(time, event.shiftKey)} title={info.appointment ? `${info.appointment.name} · ${info.appointment.phone}` : info.block?.reason}>
-                    <strong>{formatTime(start, use24Hour)}</strong>
-                    <span>{info.appointment?.name || label}</span>
-                    {busy ? <LoaderCircle className="spin" size={18} /> : <i aria-label={label}><b /></i>}
-                  </button>
+                  <div className={`admin-time-row ${info.state}${anchorTime === time ? ' anchor' : ''}`} key={time}>
+                    <button type="button" className="time-main" disabled={locked || busy} onClick={event => onSlotClick(time, event.shiftKey)} title={info.appointment ? `${info.appointment.name} · ${info.appointment.phone}` : info.block?.reason}>
+                      <strong>{formatTime(start, use24Hour)}</strong>
+                      <span>{info.appointment?.name || label}</span>
+                      {busy ? <LoaderCircle className="spin" size={18} /> : <i aria-label={label}><b /></i>}
+                    </button>
+                    {bookable && (
+                      <button
+                        type="button"
+                        className="time-add"
+                        title="Bu saate randevu ekle"
+                        aria-label={`${formatTime(start, use24Hour)} saatine randevu ekle`}
+                        onClick={() => openManual(time)}
+                      ><UserPlus size={14} /></button>
+                    )}
+                  </div>
                 );
               })}
             </div>
@@ -760,7 +777,9 @@ function AppointmentSection({ list, loading, moreBusy, filter, search, searching
         <div>
           <span className="eyebrow">Randevular</span>
           <h2>Talep ve onaylar</h2>
-          <button type="button" className="manual-add" onClick={onCreate}>
+          {/* Sarmalanmadan geçilirse React tıklama olayını `time` parametresine
+              yollar ve varsayılan saat devre dışı kalır. */}
+          <button type="button" className="manual-add" onClick={() => onCreate()}>
             <UserPlus size={15} /> Telefonla randevu ekle
           </button>
         </div>

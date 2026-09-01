@@ -3,29 +3,22 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "description": "Cem Avat full-custom appointment system",
+  "description": "Cem Avat full-custom appointment system (React + Rust)",
   "scripts": {
     "dev": "concurrently -k -n api,web -c green,cyan \"npm:dev:api\" \"npm:dev:web\"",
-    "dev:api": "node --watch server.js",
+    "dev:api": "cargo run --manifest-path server/Cargo.toml",
     "dev:web": "vite",
-    "dev:rust": "concurrently -k -n rust,web -c magenta,cyan \"npm:dev:rs\" \"npm:dev:web\"",
-    "dev:rs": "cargo run --manifest-path server/Cargo.toml",
-    "build": "tsc -b && vite build",
-    "build:rs": "cargo build --release --manifest-path server/Cargo.toml",
-    "start": "node server.js",
-    "start:rs": "./server/target/release/cemox-server",
-    "test": "node --test",
-    "test:rs": "cargo test --manifest-path server/Cargo.toml",
-    "check": "tsc -b && node --check server.js && node --check src/config.js && node --check src/db.js && node --check src/email.js && node scripts/check.mjs",
-    "check:rs": "cargo fmt --manifest-path server/Cargo.toml --check && cargo clippy --manifest-path server/Cargo.toml --all-targets -- -D warnings"
+    "build": "tsc -b && vite build && npm run build:api",
+    "build:api": "cargo build --release --manifest-path server/Cargo.toml",
+    "start": "./server/target/release/cemox-server",
+    "test": "cargo test --manifest-path server/Cargo.toml",
+    "check": "tsc -b && cargo fmt --manifest-path server/Cargo.toml --check && cargo clippy --manifest-path server/Cargo.toml --all-targets -- -D warnings && node scripts/check.mjs"
   },
   "engines": {
     "node": ">=24"
   },
   "dependencies": {
-    "express": "^5.1.0",
     "lucide-react": "^1.28.0",
-    "nodemailer": "^9.0.3",
     "react": "^19.2.0",
     "react-dom": "^19.2.0"
   },

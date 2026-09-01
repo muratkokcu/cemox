@@ -11,7 +11,7 @@ type DashboardData = { slots: AdminSlot[]; monthAppointments: Appointment[]; blo
 /** Randevu listesi: sunucu tarafında filtrelenir ve sayfalanır. */
 type AppointmentList = { items: Appointment[]; total: number };
 
-/** Sunucudaki BOOKING_RULES ile aynı kalmalıdır (src/config.js, server/src/config.rs). */
+/** server/src/config.rs içindeki BOOKING_RULES ile aynı kalmalıdır. */
 const SLOT_MS = 20 * 60_000;
 const BUFFER_MS = 10 * 60_000;
 /** Yönetici tarafından değiştirilemeyen saat durumları. */

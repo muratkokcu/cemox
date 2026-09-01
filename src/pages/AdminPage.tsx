@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Ban, CalendarClock, CalendarOff, Check, CheckCheck, ChevronDown, CircleCheck, CircleX, Copy as CopyIcon, LoaderCircle, LogOut, Plus, RefreshCw, ShieldCheck, Trash2, TriangleAlert, X } from 'lucide-react';
+import { Ban, CalendarClock, CalendarOff, Check, CheckCheck, ChevronDown, CircleCheck, CircleX, Copy as CopyIcon, Hourglass, LoaderCircle, LogOut, Plus, RefreshCw, ShieldCheck, Trash2, TriangleAlert, X } from 'lucide-react';
 import { MonthCalendar } from '../components/MonthCalendar';
 import { TimeFormatToggle } from '../components/TimeFormatToggle';
 import { api, ApiError } from '../web/api';
-import { addDays, addMonths, DAY_MS, formatBlockRange, formatDateTime, formatMonth, formatSelectedDate, formatTime, localDateKey, monthDays, monthKey, monthRange, timeOptions, toTimestamp } from '../web/date';
+import { addDays, addMonths, DAY_MS, formatBlockRange, formatDateTime, formatDuration, formatMonth, formatRelative, formatSelectedDate, formatTime, localDateKey, monthDays, monthKey, monthRange, timeOptions, toTimestamp } from '../web/date';
 import type { AdminSlot, Appointment, AppointmentStatus, AvailabilityBlock, Service } from '../web/types';
 
 /** Takvim görünümünün verisi: gezilen ay ve seçili branşla sınırlı, sayfalanmamış. */
@@ -498,26 +498,15 @@ function AdminDashboard({ csrf, onExpired }: { csrf: string; onExpired: () => vo
           onRemove={block => { setBlockError(''); setRemovingBlock(block); }}
         />
 
-        <section className="appointment-section">
-          <header><div><span className="eyebrow">Randevular</span><h2>Talep ve onaylar</h2></div><div className="filter-tabs">{filters.map(value => <button type="button" key={value || 'all'} className={filter === value ? 'active' : ''} onClick={() => setFilter(value)}>{value ? statusLabels[value] : 'Tümü'}</button>)}</div></header>
-          <div className="appointment-list">
-            {listLoading && <div className="panel-state"><LoaderCircle className="spin" /> Randevular yükleniyor…</div>}
-            {!listLoading && !list.items.length && <div className="panel-state">Bu filtrede randevu bulunmuyor.</div>}
-            {!listLoading && list.items.map(item => <AppointmentCard key={item.id} appointment={item} onDecide={openDecision} />)}
-          </div>
-          {!listLoading && list.total > 0 && (
-            <footer className="appointment-footer">
-              <span>{list.items.length} / {list.total} randevu gösteriliyor</span>
-              {list.items.length < list.total && (
-                <button type="button" disabled={listMoreBusy} onClick={loadMoreAppointments}>
-                  {listMoreBusy
-                    ? <><LoaderCircle className="spin" size={15} /> Yükleniyor…</>
-                    : <><ChevronDown size={15} /> Daha fazla yükle</>}
-                </button>
-              )}
-            </footer>
-          )}
-        </section>
+        <AppointmentSection
+          list={list}
+          loading={listLoading}
+          moreBusy={listMoreBusy}
+          filter={filter}
+          onFilter={setFilter}
+          onLoadMore={loadMoreAppointments}
+          onDecide={openDecision}
+        />
       </main>
       {decision && <DecisionModal decision={decision} busy={decisionBusy} error={decisionError} onClose={() => { if (!decisionBusy) setDecision(null); }} onConfirm={decide} />}
       {blockDraft && (
@@ -556,15 +545,106 @@ function AdminDashboard({ csrf, onExpired }: { csrf: string; onExpired: () => vo
   );
 }
 
-function AppointmentCard({ appointment, onDecide }: { appointment: Appointment; onDecide: (appointment: Appointment, action: DecisionAction) => void }) {
-  const pending = ['PENDING', 'CONFLICT'].includes(appointment.status);
+/** Geri sayımların canlı kalması için düzenli aralıkla tazelenen zaman damgası. */
+function useTicker(intervalMs: number): number {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), intervalMs);
+    return () => window.clearInterval(timer);
+  }, [intervalMs]);
+  return now;
+}
+
+function AppointmentSection({ list, loading, moreBusy, filter, onFilter, onLoadMore, onDecide }: {
+  list: AppointmentList;
+  loading: boolean;
+  moreBusy: boolean;
+  filter: AppointmentStatus | '';
+  onFilter: (value: AppointmentStatus | '') => void;
+  onLoadMore: () => void;
+  onDecide: (appointment: Appointment, action: DecisionAction) => void;
+}) {
+  // Tutma süresi dakika çözünürlüğünde gösterildiği için yarım dakikalık tik yeterli.
+  const now = useTicker(30_000);
+  return (
+    <section className="appointment-section">
+      <header>
+        <div><span className="eyebrow">Randevular</span><h2>Talep ve onaylar</h2></div>
+        <div className="filter-tabs">
+          {filters.map(value => (
+            <button type="button" key={value || 'all'} className={filter === value ? 'active' : ''} onClick={() => onFilter(value)}>
+              {value ? statusLabels[value] : 'Tümü'}
+            </button>
+          ))}
+        </div>
+      </header>
+      <div className="appointment-list">
+        {loading && <div className="panel-state"><LoaderCircle className="spin" /> Randevular yükleniyor…</div>}
+        {!loading && !list.items.length && <div className="panel-state">Bu filtrede randevu bulunmuyor.</div>}
+        {!loading && list.items.map(item => (
+          <AppointmentCard key={item.id} appointment={item} now={now} onDecide={onDecide} />
+        ))}
+      </div>
+      {!loading && list.total > 0 && (
+        <footer className="appointment-footer">
+          <span>{list.items.length} / {list.total} randevu gösteriliyor</span>
+          {list.items.length < list.total && (
+            <button type="button" disabled={moreBusy} onClick={onLoadMore}>
+              {moreBusy
+                ? <><LoaderCircle className="spin" size={15} /> Yükleniyor…</>
+                : <><ChevronDown size={15} /> Daha fazla yükle</>}
+            </button>
+          )}
+        </footer>
+      )}
+    </section>
+  );
+}
+
+function AppointmentCard({ appointment, now, onDecide }: {
+  appointment: Appointment;
+  now: number;
+  onDecide: (appointment: Appointment, action: DecisionAction) => void;
+}) {
+  const decidable = ['PENDING', 'CONFLICT'].includes(appointment.status);
+  // Tutma süresi yalnızca PENDING kayıtlarda işler; diğer durumlar sunucuda süresi dolmaz.
+  const holdLeft = appointment.status === 'PENDING' ? appointment.hold_expires_at - now : null;
+  const urgency = holdLeft === null ? ''
+    : holdLeft <= 3_600_000 ? ' urgent'
+    : holdLeft <= 3 * 3_600_000 ? ' soon' : '';
+
   return (
     <article className="appointment-card">
-      <div className="appointment-date"><CalendarClock /><span>{formatDateTime(appointment.start_at)}</span></div>
-      <div className="appointment-person"><h3>{appointment.name}</h3><p>{appointment.service_name}</p><p><a href={`tel:${appointment.phone}`}>{appointment.phone}</a> · <a href={`mailto:${appointment.email}`}>{appointment.email}</a></p>{appointment.note && <blockquote>{appointment.note}</blockquote>}</div>
-      <span className={`status-badge ${appointment.status.toLowerCase()}`}>{statusLabels[appointment.status]}</span>
+      <div className="appointment-date">
+        <div><CalendarClock /><span>{formatDateTime(appointment.start_at)}</span></div>
+        <small title={formatDateTime(appointment.created_at)}>{formatRelative(appointment.created_at, now)} talep edildi</small>
+      </div>
+
+      <div className="appointment-person">
+        <h3>{appointment.name}</h3>
+        <p>{appointment.service_name}</p>
+        <p><a href={`tel:${appointment.phone}`}>{appointment.phone}</a> · <a href={`mailto:${appointment.email}`}>{appointment.email}</a></p>
+        {appointment.note && <blockquote>{appointment.note}</blockquote>}
+        {appointment.admin_note && (
+          <div className="admin-note"><strong>Yönetici notu</strong>{appointment.admin_note}</div>
+        )}
+      </div>
+
+      <div className="appointment-status">
+        <span className={`status-badge ${appointment.status.toLowerCase()}`}>{statusLabels[appointment.status]}</span>
+        {holdLeft !== null && (
+          <span className={`hold-left${urgency}`} title={`Talep ${formatDateTime(appointment.hold_expires_at)} tarihinde otomatik olarak düşer`}>
+            <Hourglass size={12} />
+            {holdLeft > 0 ? `${formatDuration(holdLeft)} kaldı` : 'Süresi doldu'}
+          </span>
+        )}
+        {appointment.decision_at !== null && (
+          <small title={`Karar: ${formatDateTime(appointment.decision_at)}`}>{formatRelative(appointment.decision_at, now)}</small>
+        )}
+      </div>
+
       <div className="appointment-actions">
-        {pending && <><button className="approve" onClick={() => onDecide(appointment, 'approve')}>Onayla</button><button onClick={() => onDecide(appointment, 'reject')}>Reddet</button></>}
+        {decidable && <><button className="approve" onClick={() => onDecide(appointment, 'approve')}>Onayla</button><button onClick={() => onDecide(appointment, 'reject')}>Reddet</button></>}
         {appointment.status === 'APPROVED' && <button onClick={() => onDecide(appointment, 'cancel')}>İptal et</button>}
       </div>
     </article>

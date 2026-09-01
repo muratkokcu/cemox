@@ -23,6 +23,8 @@ export type Appointment = {
   status: AppointmentStatus;
   hold_expires_at: number;
   created_at: number;
+  /** Karara bağlanana kadar null. */
+  decision_at: number | null;
   admin_note: string;
 };
 

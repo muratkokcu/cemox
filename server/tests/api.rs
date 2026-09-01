@@ -658,3 +658,96 @@ async fn admin_can_write_many_slots_in_one_request() {
         .await;
     assert_eq!(no_csrf.status, 403);
 }
+
+#[tokio::test]
+async fn pending_appointments_are_ordered_by_hold_expiry() {
+    let server = common::start().await;
+    let (cookie, csrf) = server.login().await;
+    let read = [("Cookie", cookie.as_str())];
+
+    // Randevu tarihi ile talep sırası kasten ters: en geç randevu en eski taleptir.
+    // Aciliyet sıralaması doğruysa listede o başa gelmelidir.
+    let now = now_ms();
+    for (index, hours_ago) in [2i64, 20, 11].into_iter().enumerate() {
+        let start_at = now + (30 - index as i64) * 86_400_000;
+        server
+            .db
+            .create_appointment(
+                &NewAppointment {
+                    service_id: "medical-fitness".into(),
+                    service_name: "Test".into(),
+                    start_at,
+                    end_at: start_at + BOOKING_RULES.slot_ms(),
+                    name: format!("{hours_ago} saat önce"),
+                    email: format!("hold{hours_ago}@example.com"),
+                    phone: format!("+9055500{hours_ago:05}"),
+                    note: String::new(),
+                },
+                now - hours_ago * 3_600_000,
+            )
+            .expect("randevu eklenemedi");
+    }
+
+    let names = |response: &Value| -> Vec<String> {
+        response["appointments"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|item| item["name"].as_str().unwrap().to_string())
+            .collect()
+    };
+
+    // En eski talep (süresi ilk dolacak) başta.
+    let filtered = server
+        .request(
+            Method::GET,
+            "/api/admin/appointments?status=PENDING",
+            &read,
+            None,
+        )
+        .await;
+    assert_eq!(
+        names(&filtered.body),
+        vec!["20 saat önce", "11 saat önce", "2 saat önce"]
+    );
+
+    // Filtresiz listede de bekleyenler aynı sırayla ve başta yer alır.
+    let all = server
+        .request(Method::GET, "/api/admin/appointments", &read, None)
+        .await;
+    assert_eq!(
+        names(&all.body),
+        vec!["20 saat önce", "11 saat önce", "2 saat önce"]
+    );
+
+    // Karara bağlananlar randevu tarihine göre sıralanmaya devam eder.
+    let pending_ids: Vec<String> = all.body["appointments"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|item| item["id"].as_str().unwrap().to_string())
+        .collect();
+    for id in &pending_ids {
+        server
+            .request(
+                Method::PATCH,
+                &format!("/api/admin/appointments/{id}"),
+                &[("Cookie", cookie.as_str()), ("x-csrf-token", csrf.as_str())],
+                Some(json!({ "action": "reject", "adminNote": "" })),
+            )
+            .await;
+    }
+    let decided = server
+        .request(
+            Method::GET,
+            "/api/admin/appointments?status=REJECTED",
+            &read,
+            None,
+        )
+        .await;
+    assert_eq!(
+        names(&decided.body),
+        vec!["11 saat önce", "20 saat önce", "2 saat önce"],
+        "karara bağlananlar randevu tarihine göre sıralanır"
+    );
+}

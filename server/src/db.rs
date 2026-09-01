@@ -287,11 +287,18 @@ impl Db {
         } else {
             format!("WHERE {}", clauses.join(" AND "))
         };
-        // Durum filtresi yokken bekleyenler başa alınır; `id` sayfalar arası kararlılık için.
-        let order = if query.status.is_empty() {
-            "CASE status WHEN 'PENDING' THEN 0 ELSE 1 END, start_at ASC, id ASC"
-        } else {
-            "start_at ASC, id ASC"
+        // Bekleyen talepler tutma süresi dolmadan karara bağlanmalıdır; bu yüzden
+        // randevu tarihine değil, önce süresi dolacak olana göre sıralanırlar.
+        // (hold_expires_at = created_at + 24 sa olduğundan bu aynı zamanda geliş sırasıdır.)
+        // Karara bağlanmış kayıtlar randevu tarihine göre kalır.
+        // `id` sayfalar arası kararlılık için son ölçüttür.
+        let order = match query.status.as_str() {
+            "" => {
+                "CASE status WHEN 'PENDING' THEN 0 ELSE 1 END, \
+                 CASE status WHEN 'PENDING' THEN hold_expires_at ELSE start_at END ASC, id ASC"
+            }
+            "PENDING" => "hold_expires_at ASC, id ASC",
+            _ => "start_at ASC, id ASC",
         };
 
         let filter_refs: Vec<&dyn rusqlite::ToSql> =

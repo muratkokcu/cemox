@@ -118,3 +118,27 @@ export function formatBlockRange(startAt: number, endAt: number, use24Hour = tru
   return `${dayMonthYear.format(startAt)} ${formatTime(startAt, use24Hour)}`
     + ` → ${dayMonthYear.format(endAt)} ${formatTime(endAt, use24Hour)}`;
 }
+
+const relativeFormat = new Intl.RelativeTimeFormat('tr', { numeric: 'always' });
+const RELATIVE_UNITS: Array<[Intl.RelativeTimeFormatUnit, number]> = [
+  ['minute', 60], ['hour', 3600], ['day', 86_400], ['month', 2_592_000], ['year', 31_536_000]
+];
+
+/** "12 dakika önce", "3 saat önce", "2 gün önce". */
+export function formatRelative(timestamp: number, now = Date.now()): string {
+  const seconds = Math.round((timestamp - now) / 1000);
+  const absolute = Math.abs(seconds);
+  if (absolute < 60) return seconds > 0 ? 'birazdan' : 'az önce';
+  let unit = RELATIVE_UNITS[0];
+  for (const candidate of RELATIVE_UNITS) if (absolute >= candidate[1]) unit = candidate;
+  return relativeFormat.format(Math.round(seconds / unit[1]), unit[0]);
+}
+
+/** Kalan süre: "18 sa 24 dk", "45 dk". Negatif değerler sıfıra çekilir. */
+export function formatDuration(ms: number): string {
+  const totalMinutes = Math.max(0, Math.floor(ms / 60_000));
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  if (!hours) return `${minutes} dk`;
+  return minutes ? `${hours} sa ${minutes} dk` : `${hours} sa`;
+}

@@ -234,9 +234,14 @@ a { color: inherit; text-decoration: none; }
 .admin-time-row { min-height: 49px; display: grid; grid-template-columns: 1fr auto; align-items: stretch; margin-bottom: 7px; border: 1px solid #dedfdb; border-radius: 8px; background: white; overflow: hidden; }
 .time-main { display: grid; grid-template-columns: 70px 1fr auto; align-items: center; gap: 8px; padding: 7px 11px; border: 0; color: #272a26; background: transparent; font: inherit; text-align: left; cursor: pointer; }
 .time-main:disabled { cursor: default; }
-.time-add { display: grid; place-items: center; width: 34px; padding: 0; border: 0; color: #b9bdb6; background: transparent; cursor: pointer; transition: color .12s, background .12s; }
+/* Boştaki renk satırın ikincil metniyle aynı: dokunmatikte hover olmadığı için
+   görünen tek durum budur ve arayüz bileşenleri için 3:1 kontrast gerekir. */
+.time-add { display: grid; place-items: center; width: 34px; padding: 0; border: 0; color: var(--muted); background: transparent; cursor: pointer; transition: color .12s, background .12s; }
 .admin-time-row:hover .time-add { color: var(--green); }
-.time-add:hover, .time-add:focus-visible { color: white; background: var(--green); }
+/* Butonun kendi hover'ı satır hover'ıyla aynı özgüllükte olmalı; daha düşük
+   kalırsa ikon rengi satır kuralından gelir ve yeşil zeminde yeşil kalır. */
+.admin-time-row .time-add:hover,
+.admin-time-row .time-add:focus-visible { color: white; background: var(--green); }
 .admin-time-row strong { font-size: 12px; font-variant-numeric: tabular-nums; }
 .time-main > span { overflow: hidden; color: var(--muted); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 .admin-time-row i { position: relative; width: 34px; height: 19px; border-radius: 12px; background: #d7d9d4; transition: background .15s; }

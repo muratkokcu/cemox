@@ -88,6 +88,9 @@ function visibleDraftError(draft: AppointmentDraft, unchangedStart?: number): st
 const POLL_MS = 60_000;
 const PAGE_TITLE = 'Cem Avat · Randevu';
 
+/** Bildirimleri ayırt etmek için artan sayaç; tarih tabanlı id çakışabiliyordu. */
+let nextToastId = 1;
+
 const PAGE_SIZE = 25;
 /** Takvim bir ayı kapsar; sunucu üst sınırı 500. */
 const CALENDAR_LIMIT = 500;
@@ -198,7 +201,8 @@ function AdminDashboard({ csrf, onExpired }: { csrf: string; onExpired: () => vo
   const [use24Hour, setUse24Hour] = useState(true);
   const [filter, setFilter] = useState<AppointmentStatus | ''>('');
   const [error, setError] = useState('');
-  const [toast, setToast] = useState('');
+  /** Bildirimler yığılır; hızlı ardışık işlemlerde mesajlar birbirini ezmez. */
+  const [toasts, setToasts] = useState<Array<{ id: number; message: string }>>([]);
   const [decision, setDecision] = useState<{ appointment: Appointment; action: DecisionAction } | null>(null);
   const [decisionBusy, setDecisionBusy] = useState(false);
   const [decisionError, setDecisionError] = useState('');
@@ -224,9 +228,14 @@ function AdminDashboard({ csrf, onExpired }: { csrf: string; onExpired: () => vo
   const [formBusy, setFormBusy] = useState(false);
   const [formError, setFormError] = useState('');
 
+  const dismissToast = useCallback((id: number) => {
+    setToasts(current => current.filter(item => item.id !== id));
+  }, []);
+
   const notify = useCallback((message: string) => {
-    setToast(message);
-    window.setTimeout(() => setToast(''), 2400);
+    const id = nextToastId++;
+    setToasts(current => [...current, { id, message }]);
+    window.setTimeout(() => setToasts(current => current.filter(item => item.id !== id)), 3200);
   }, []);
 
   const guard = useCallback((err: unknown) => {
@@ -461,8 +470,10 @@ function AdminDashboard({ csrf, onExpired }: { csrf: string; onExpired: () => vo
       }, csrf);
       notify(describe(changes.length));
     } catch (err) {
-      guard(err);
+      // Önce iyimser durum geri alınır, sonra hata yazılır: `loadData` başlarken
+      // hata bandını temizlediği için ters sırada mesaj kullanıcıya hiç görünmezdi.
       await loadData();
+      guard(err);
     } finally {
       setBusySlots(current => {
         const next = new Set(current);
@@ -685,7 +696,12 @@ function AdminDashboard({ csrf, onExpired }: { csrf: string; onExpired: () => vo
       </header>
       <main className="admin-content">
         <div className="admin-title"><div><span className="eyebrow">Müsaitlik planı</span><h1>Takvim</h1><p>Branşı, günü ve saati seçerek randevuya açın veya kapatın.</p></div><div className="legend"><span className="open">Açık</span><span className="pending">Bekliyor</span><span className="approved">Onaylı</span></div></div>
-        {error && <div className="page-error">{error}<button onClick={() => setError('')}><X size={16} /></button></div>}
+        {error && (
+          <div className="page-error" role="alert">
+            {error}
+            <button type="button" aria-label="Hatayı kapat" onClick={() => setError('')}><X size={16} /></button>
+          </div>
+        )}
 
         <div className="admin-scheduler">
           <aside className="admin-service-panel">
@@ -704,6 +720,10 @@ function AdminDashboard({ csrf, onExpired }: { csrf: string; onExpired: () => vo
             onMonthChange={direction => {
               const next = monthKey(addMonths(`${month}-01`, direction));
               setMonth(next); setSelectedDate(`${next}-01`);
+            }}
+            onToday={() => {
+              const today = localDateKey();
+              setMonth(monthKey(today)); setSelectedDate(today);
             }}
           />
           <section className="admin-times-panel">
@@ -845,7 +865,15 @@ function AdminDashboard({ csrf, onExpired }: { csrf: string; onExpired: () => vo
           <span>Göster</span>
         </button>
       )}
-      {toast && <div className="toast" role="status"><Check size={17} /> {toast}</div>}
+      {toasts.length > 0 && (
+        <div className="toast-stack" role="status" aria-live="polite">
+          {toasts.map(item => (
+            <button type="button" className="toast" key={item.id} title="Kapat" onClick={() => dismissToast(item.id)}>
+              <Check size={17} /> {item.message}
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

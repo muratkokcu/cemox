@@ -10,12 +10,14 @@ type Props = {
   maxMonth?: string;
   onMonthChange: (direction: -1 | 1) => void;
   onSelectDate: (date: string) => void;
+  /** Verilirse başlıkta bugüne dönüş butonu çıkar. */
+  onToday?: () => void;
 };
 
 const weekdays = ['PZT', 'SAL', 'ÇAR', 'PER', 'CUM', 'CMT', 'PAZ'];
 
 export function MonthCalendar({
-  month, selectedDate, enabledDates, dateTones, minMonth, maxMonth, onMonthChange, onSelectDate
+  month, selectedDate, enabledDates, dateTones, minMonth, maxMonth, onMonthChange, onSelectDate, onToday
 }: Props) {
   const today = localDateKey();
   const cells = monthDays(month);
@@ -27,6 +29,14 @@ export function MonthCalendar({
       <header className="calendar-heading">
         <h2>{formatMonth(month)}</h2>
         <div className="calendar-nav">
+          {onToday && (
+            <button
+              type="button"
+              className="calendar-today"
+              disabled={month.slice(0, 7) === today.slice(0, 7) && selectedDate === today}
+              onClick={onToday}
+            >Bugün</button>
+          )}
           <button type="button" aria-label="Önceki ay" disabled={!canGoBack} onClick={() => onMonthChange(-1)}>
             <ChevronLeft size={19} />
           </button>

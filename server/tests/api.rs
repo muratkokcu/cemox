@@ -4,7 +4,7 @@ mod common;
 
 use cemox_server::config::BOOKING_RULES;
 use cemox_server::db::{Db, NewAppointment};
-use cemox_server::time::{now_ms, parse_timestamp, to_iso_string};
+use cemox_server::time::{civil_from_ms, now_ms, parse_timestamp, to_iso_string, utc_ms_hm};
 use reqwest::Method;
 use serde_json::{Value, json};
 
@@ -503,4 +503,158 @@ async fn admin_appointments_are_filtered_and_paginated_server_side() {
         .await;
     assert_eq!(empty.status, 200);
     assert_eq!(empty.body["total"], 60);
+}
+
+#[tokio::test]
+async fn admin_can_write_many_slots_in_one_request() {
+    let server = common::start().await;
+    let (cookie, csrf) = server.login().await;
+    let headers = [("Cookie", cookie.as_str()), ("x-csrf-token", csrf.as_str())];
+
+    // 30 dakikalık ızgarada, gelecekteki saatler.
+    let now = now_ms();
+    let local = civil_from_ms(now + BOOKING_RULES.offset_ms());
+    let grid = |day_offset: i64, index: i64| -> i64 {
+        let minutes = 8 * 60 + index * 30;
+        utc_ms_hm(
+            local.year,
+            local.month as i64 - 1,
+            local.day as i64 + day_offset,
+            minutes / 60,
+            minutes % 60,
+        ) - BOOKING_RULES.offset_ms()
+    };
+
+    // Bir günün 28 saati tek istekte.
+    let day: Vec<Value> = (0..28)
+        .map(|index| json!({ "start": to_iso_string(grid(3, index)), "open": true }))
+        .collect();
+    let opened = server
+        .request(
+            Method::PUT,
+            "/api/admin/availability-slots/bulk",
+            &headers,
+            Some(json!({ "serviceId": "medical-fitness", "slots": day })),
+        )
+        .await;
+    assert_eq!(opened.status, 200, "{:?}", opened.body);
+    assert_eq!(opened.body["applied"], 28);
+
+    let listed = server
+        .request(
+            Method::GET,
+            &format!(
+                "/api/admin/availability-slots?service=medical-fitness&from={}&to={}",
+                to_iso_string(grid(3, 0) - 3_600_000),
+                to_iso_string(grid(3, 27) + 3_600_000)
+            ),
+            &headers,
+            None,
+        )
+        .await;
+    assert_eq!(listed.body["slots"].as_array().unwrap().len(), 28);
+
+    // Karışık açık/kapalı: kopyalama senaryosu.
+    let mixed: Vec<Value> = (0..28)
+        .map(|index| json!({ "start": to_iso_string(grid(3, index)), "open": index % 2 == 0 }))
+        .collect();
+    let applied = server
+        .request(
+            Method::PUT,
+            "/api/admin/availability-slots/bulk",
+            &headers,
+            Some(json!({ "serviceId": "medical-fitness", "slots": mixed })),
+        )
+        .await;
+    assert_eq!(applied.body["applied"], 28);
+    let after = server
+        .request(
+            Method::GET,
+            &format!(
+                "/api/admin/availability-slots?service=medical-fitness&from={}&to={}",
+                to_iso_string(grid(3, 0) - 3_600_000),
+                to_iso_string(grid(3, 27) + 3_600_000)
+            ),
+            &headers,
+            None,
+        )
+        .await;
+    assert_eq!(
+        after.body["slots"].as_array().unwrap().len(),
+        14,
+        "yalnızca açık işaretlenenler kalmalı"
+    );
+
+    // Doğrulamalar tek slotluk uçla aynı mesajları verir.
+    for (body, message) in [
+        (
+            json!({ "serviceId": "medical-fitness", "slots": [] }),
+            "En az bir saat seçilmelidir.",
+        ),
+        (
+            json!({ "serviceId": "yok", "slots": [{ "start": to_iso_string(grid(3, 0)), "open": true }] }),
+            "Geçerli bir hizmet seçin.",
+        ),
+        (
+            json!({ "serviceId": "medical-fitness", "slots": [{ "start": "2020-01-01T07:00:00.000Z", "open": true }] }),
+            "Geçmiş bir saat değiştirilemez.",
+        ),
+        (
+            json!({ "serviceId": "medical-fitness", "slots": [{ "start": "2040-01-01T07:07:00.000Z", "open": true }] }),
+            "Slot 30 dakikalık takvime uygun değil.",
+        ),
+        (
+            json!({ "serviceId": "medical-fitness", "slots": [{ "start": "yarin", "open": true }] }),
+            "Slot zamanı geçerli değil.",
+        ),
+        (
+            json!({ "serviceId": "medical-fitness", "slots": [
+                { "start": to_iso_string(grid(4, 0)), "open": true },
+                { "start": to_iso_string(grid(4, 0)), "open": false }
+            ] }),
+            "Aynı saat birden fazla kez gönderildi.",
+        ),
+    ] {
+        let response = server
+            .request(
+                Method::PUT,
+                "/api/admin/availability-slots/bulk",
+                &headers,
+                Some(body),
+            )
+            .await;
+        assert_eq!(response.status, 400, "{:?}", response.body);
+        assert_eq!(response.body["error"]["message"], message);
+    }
+
+    // Sınır aşımı.
+    let too_many: Vec<Value> = (0..1001)
+        .map(
+            |index| json!({ "start": to_iso_string(grid(3, 0) + index * 1_800_000), "open": true }),
+        )
+        .collect();
+    let rejected = server
+        .request(
+            Method::PUT,
+            "/api/admin/availability-slots/bulk",
+            &headers,
+            Some(json!({ "serviceId": "medical-fitness", "slots": too_many })),
+        )
+        .await;
+    assert_eq!(rejected.status, 400);
+    assert_eq!(
+        rejected.body["error"]["message"],
+        "Tek seferde en fazla 1000 saat değiştirilebilir."
+    );
+
+    // CSRF başlığı olmadan yazılamaz.
+    let no_csrf = server
+        .request(
+            Method::PUT,
+            "/api/admin/availability-slots/bulk",
+            &[("Cookie", cookie.as_str())],
+            Some(json!({ "serviceId": "medical-fitness", "slots": [{ "start": to_iso_string(grid(5, 0)), "open": true }] })),
+        )
+        .await;
+    assert_eq!(no_csrf.status, 403);
 }

@@ -18,7 +18,7 @@ use tower_http::services::ServeDir;
 use tower_http::set_header::SetResponseHeaderLayer;
 
 use crate::config::{BOOKING_RULES, Config, SERVICES, app_root, service_name};
-use crate::db::{AdminSession, AppointmentQuery, Db, NewAppointment};
+use crate::db::{AdminSession, AppointmentQuery, Db, NewAppointment, SlotChange};
 use crate::email::EmailService;
 use crate::error::AppError;
 use crate::time::{
@@ -109,6 +109,11 @@ pub fn build_router(state: AppState) -> Router {
         .route(
             "/api/admin/availability-slots",
             get(admin_list_slots).put(admin_set_slot),
+        )
+        .route(
+            "/api/admin/availability-slots/bulk",
+            // Bir aylık takvim tek istekte gelebildiği için genel 24kb sınırı yetmez.
+            axum::routing::put(admin_set_slots_bulk).layer(DefaultBodyLimit::max(256 * 1024)),
         )
         .layer(middleware::from_fn_with_state(state.clone(), require_admin));
 
@@ -716,6 +721,54 @@ async fn admin_list_slots(
     let db = state.db.clone();
     let slots = blocking(move || db.list_availability_slots(&service_id, from, to)).await?;
     Ok(Json(json!({ "slots": slots })))
+}
+
+/// Bir aylık takvimin tamamı (31 gün x 28 saat) tek istekte sığsın diye.
+const MAX_BULK_SLOTS: usize = 1000;
+
+async fn admin_set_slots_bulk(
+    State(state): State<AppState>,
+    body: Bytes,
+) -> Result<Json<Value>, AppError> {
+    let payload = parse_json(&body)?;
+    let service_id = as_string(&payload, "serviceId");
+    assert_service(&service_id)?;
+
+    let entries = payload
+        .get("slots")
+        .and_then(Value::as_array)
+        .filter(|entries| !entries.is_empty())
+        .ok_or_else(|| AppError::validation("En az bir saat seçilmelidir."))?;
+    if entries.len() > MAX_BULK_SLOTS {
+        return Err(AppError::validation(format!(
+            "Tek seferde en fazla {MAX_BULK_SLOTS} saat değiştirilebilir."
+        )));
+    }
+
+    let now = now_ms();
+    let mut seen = std::collections::HashSet::with_capacity(entries.len());
+    let mut changes = Vec::with_capacity(entries.len());
+    for entry in entries {
+        let start_at = timestamp_field(entry, "start", "Slot zamanı")?;
+        assert_slot_grid(start_at)?;
+        if start_at < now {
+            return Err(AppError::validation("Geçmiş bir saat değiştirilemez."));
+        }
+        if !seen.insert(start_at) {
+            return Err(AppError::validation(
+                "Aynı saat birden fazla kez gönderildi.",
+            ));
+        }
+        changes.push(SlotChange {
+            start_at,
+            end_at: start_at + BOOKING_RULES.slot_ms(),
+            open: entry.get("open") == Some(&Value::Bool(true)),
+        });
+    }
+
+    let db = state.db.clone();
+    let applied = blocking(move || db.set_availability_slots(&service_id, &changes, now)).await?;
+    Ok(Json(json!({ "applied": applied })))
 }
 
 async fn admin_set_slot(

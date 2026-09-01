@@ -118,6 +118,13 @@ pub struct AppointmentPage {
     pub total: i64,
 }
 
+/// Toplu yazımda tek bir saatin hedef durumu.
+pub struct SlotChange {
+    pub start_at: i64,
+    pub end_at: i64,
+    pub open: bool,
+}
+
 pub struct NewAppointment {
     pub service_id: String,
     pub service_name: String,
@@ -548,6 +555,30 @@ impl Db {
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
 
+    /// Birden çok saati tek transaction'da açar/kapatır.
+    /// Toplu gün ve kopyalama işlemleri bunu kullanır; tek tek çağrı yapılmaz.
+    pub fn set_availability_slots(
+        &self,
+        service_id: &str,
+        changes: &[SlotChange],
+        now: i64,
+    ) -> Result<usize, AppError> {
+        let mut conn = self.conn()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        for change in changes {
+            set_availability_slot_conn(
+                &tx,
+                service_id,
+                change.start_at,
+                change.end_at,
+                change.open,
+                now,
+            )?;
+        }
+        tx.commit()?;
+        Ok(changes.len())
+    }
+
     pub fn set_availability_slot(
         &self,
         service_id: &str,
@@ -557,33 +588,7 @@ impl Db {
         now: i64,
     ) -> Result<Option<AvailabilitySlot>, AppError> {
         let conn = self.conn()?;
-        if open {
-            conn.execute(
-                "INSERT INTO availability_slots (id, service_id, start_at, end_at, created_at) \
-                 VALUES (?, ?, ?, ?, ?) \
-                 ON CONFLICT(service_id, start_at) DO UPDATE SET end_at = excluded.end_at",
-                params![
-                    Uuid::new_v4().to_string(),
-                    service_id,
-                    start_at,
-                    end_at,
-                    now
-                ],
-            )?;
-        } else {
-            conn.execute(
-                "DELETE FROM availability_slots WHERE service_id = ? AND start_at = ?",
-                params![service_id, start_at],
-            )?;
-        }
-        conn.query_row(
-            "SELECT id, service_id, start_at, end_at, created_at FROM availability_slots \
-             WHERE service_id = ? AND start_at = ?",
-            params![service_id, start_at],
-            map_slot,
-        )
-        .optional()
-        .map_err(AppError::from)
+        set_availability_slot_conn(&conn, service_id, start_at, end_at, open, now)
     }
 
     // ---- yönetici oturumları ----------------------------------------------
@@ -705,6 +710,43 @@ fn is_range_free_conn(
         )
         .optional()?;
     Ok(blocked.is_none())
+}
+
+fn set_availability_slot_conn(
+    conn: &Connection,
+    service_id: &str,
+    start_at: i64,
+    end_at: i64,
+    open: bool,
+    now: i64,
+) -> Result<Option<AvailabilitySlot>, AppError> {
+    if open {
+        conn.execute(
+            "INSERT INTO availability_slots (id, service_id, start_at, end_at, created_at) \
+             VALUES (?, ?, ?, ?, ?) \
+             ON CONFLICT(service_id, start_at) DO UPDATE SET end_at = excluded.end_at",
+            params![
+                Uuid::new_v4().to_string(),
+                service_id,
+                start_at,
+                end_at,
+                now
+            ],
+        )?;
+    } else {
+        conn.execute(
+            "DELETE FROM availability_slots WHERE service_id = ? AND start_at = ?",
+            params![service_id, start_at],
+        )?;
+    }
+    conn.query_row(
+        "SELECT id, service_id, start_at, end_at, created_at FROM availability_slots \
+         WHERE service_id = ? AND start_at = ?",
+        params![service_id, start_at],
+        map_slot,
+    )
+    .optional()
+    .map_err(AppError::from)
 }
 
 fn map_block(row: &Row<'_>) -> rusqlite::Result<AvailabilityBlock> {

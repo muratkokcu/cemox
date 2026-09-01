@@ -205,6 +205,26 @@ export function createDatabase(databasePath) {
       .all(serviceId, from, to);
   }
 
+  /**
+   * Birden çok saati tek transaction'da açar/kapatır.
+   * Toplu gün ve kopyalama işlemleri bunu kullanır; tek tek çağrı yapılmaz.
+   */
+  function setAvailabilitySlots({ serviceId, changes }, now = Date.now()) {
+    sqlite.exec('BEGIN IMMEDIATE');
+    try {
+      for (const change of changes) {
+        setAvailabilitySlot({
+          serviceId, startAt: change.startAt, endAt: change.endAt, open: change.open
+        }, now);
+      }
+      sqlite.exec('COMMIT');
+      return changes.length;
+    } catch (error) {
+      sqlite.exec('ROLLBACK');
+      throw error;
+    }
+  }
+
   function setAvailabilitySlot({ serviceId, startAt, endAt, open }, now = Date.now()) {
     if (open) {
       sqlite.prepare(`
@@ -241,7 +261,7 @@ export function createDatabase(databasePath) {
   return {
     sqlite, expirePending, getBusyRanges, isRangeFree, createAppointment, getAppointment,
     listAppointments, decideAppointment, listBlocks, createBlock, deleteBlock,
-    listAvailabilitySlots, setAvailabilitySlot,
+    listAvailabilitySlots, setAvailabilitySlot, setAvailabilitySlots,
     createSession, getSession, deleteSession, close: () => sqlite.close()
   };
 }

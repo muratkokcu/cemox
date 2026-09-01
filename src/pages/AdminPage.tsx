@@ -1,15 +1,29 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Ban, CalendarClock, CalendarOff, Check, ChevronDown, CircleCheck, CircleX, LoaderCircle, LogOut, Plus, RefreshCw, ShieldCheck, Trash2, TriangleAlert, X } from 'lucide-react';
+import { Ban, CalendarClock, CalendarOff, Check, CheckCheck, ChevronDown, CircleCheck, CircleX, Copy as CopyIcon, LoaderCircle, LogOut, Plus, RefreshCw, ShieldCheck, Trash2, TriangleAlert, X } from 'lucide-react';
 import { MonthCalendar } from '../components/MonthCalendar';
 import { TimeFormatToggle } from '../components/TimeFormatToggle';
 import { api, ApiError } from '../web/api';
-import { addDays, addMonths, DAY_MS, formatBlockRange, formatDateTime, formatMonth, formatSelectedDate, formatTime, localDateKey, monthKey, monthRange, timeOptions, toTimestamp } from '../web/date';
+import { addDays, addMonths, DAY_MS, formatBlockRange, formatDateTime, formatMonth, formatSelectedDate, formatTime, localDateKey, monthDays, monthKey, monthRange, timeOptions, toTimestamp } from '../web/date';
 import type { AdminSlot, Appointment, AppointmentStatus, AvailabilityBlock, Service } from '../web/types';
 
 /** Takvim görünümünün verisi: gezilen ay ve seçili branşla sınırlı, sayfalanmamış. */
 type DashboardData = { slots: AdminSlot[]; monthAppointments: Appointment[]; blocks: AvailabilityBlock[] };
 /** Randevu listesi: sunucu tarafında filtrelenir ve sayfalanır. */
 type AppointmentList = { items: Appointment[]; total: number };
+
+/** Sunucudaki BOOKING_RULES ile aynı kalmalıdır (src/config.js, server/src/config.rs). */
+const SLOT_MS = 20 * 60_000;
+const BUFFER_MS = 10 * 60_000;
+/** Yönetici tarafından değiştirilemeyen saat durumları. */
+const LOCKED_STATES: SlotState[] = ['pending', 'approved', 'blocked', 'past'];
+/** Pazartesi'den başlayan gösterim sırası; değerler Date.getUTCDay() karşılıkları. */
+const WEEKDAYS: Array<{ label: string; value: number }> = [
+  { label: 'Pzt', value: 1 }, { label: 'Sal', value: 2 }, { label: 'Çar', value: 3 },
+  { label: 'Per', value: 4 }, { label: 'Cum', value: 5 }, { label: 'Cmt', value: 6 },
+  { label: 'Paz', value: 0 }
+];
+
+type SlotChange = { startAt: number; open: boolean };
 
 const PAGE_SIZE = 25;
 /** Takvim bir ayı kapsar; sunucu üst sınırı 500. */
@@ -126,6 +140,12 @@ function AdminDashboard({ csrf, onExpired }: { csrf: string; onExpired: () => vo
   const [removingBlock, setRemovingBlock] = useState<AvailabilityBlock | null>(null);
   const [blockBusy, setBlockBusy] = useState(false);
   const [blockError, setBlockError] = useState('');
+  /** Shift ile aralık seçiminde çıpa olarak kullanılan son tıklanan saat. */
+  /** Son yüklenen branş+ay; iskelet yalnızca bağlam değişince gösterilir. */
+  const loadedContext = useRef('');
+  const loadedFilter = useRef<AppointmentStatus | '' | null>(null);
+  const [anchorTime, setAnchorTime] = useState<string | null>(null);
+  const [copying, setCopying] = useState(false);
 
   const notify = useCallback((message: string) => {
     setToast(message);
@@ -146,7 +166,12 @@ function AdminDashboard({ csrf, onExpired }: { csrf: string; onExpired: () => vo
 
   const loadData = useCallback(async () => {
     if (!serviceId) return;
-    setLoading(true); setError('');
+    // Ay veya branş değişince eldeki veri geçersizdir ve iskelet gösterilir.
+    // Aynı bağlamda tazeleme yapılırken içerik yerinde kalır: liste yanıp sönmez,
+    // kullanıcı tıklamak üzereyken düğmeler yer değiştirmez.
+    const context = `${serviceId}:${month}`;
+    if (loadedContext.current !== context) setLoading(true);
+    setError('');
     const range = monthRange(`${month}-01`);
     try {
       const from = encodeURIComponent(new Date(range.from).toISOString());
@@ -163,21 +188,21 @@ function AdminDashboard({ csrf, onExpired }: { csrf: string; onExpired: () => vo
       ]);
       setData({ slots: slotResult.slots, monthAppointments: appointmentResult.appointments, blocks: blockResult.blocks });
     } catch (err) { guard(err); }
-    finally { setLoading(false); }
+    finally { loadedContext.current = context; setLoading(false); }
   }, [guard, month, serviceId]);
 
   useEffect(() => { loadData(); }, [loadData]);
 
   /** Listeyi baştan yükler. `count` mevcut derinliği korumak için kullanılır. */
   const loadAppointments = useCallback(async (count = PAGE_SIZE) => {
-    setListLoading(true);
+    if (loadedFilter.current !== filter) setListLoading(true);
     try {
       const query = new URLSearchParams({ limit: String(Math.min(count, CALENDAR_LIMIT)), offset: '0' });
       if (filter) query.set('status', filter);
       const result = await api<{ appointments: Appointment[]; total: number }>(`/api/admin/appointments?${query}`);
       setList({ items: result.appointments, total: result.total });
     } catch (err) { guard(err); }
-    finally { setListLoading(false); }
+    finally { loadedFilter.current = filter; setListLoading(false); }
   }, [filter, guard]);
 
   // Filtre değiştiğinde liste ilk sayfadan yeniden yüklenir.
@@ -217,24 +242,120 @@ function AdminDashboard({ csrf, onExpired }: { csrf: string; onExpired: () => vo
   function stateFor(start: number): { state: SlotState; appointment?: Appointment; block?: AvailabilityBlock } {
     const appointment = data.monthAppointments.find(item => item.start_at === start && ACTIVE_STATUSES.includes(item.status));
     if (appointment) return { state: appointment.status === 'APPROVED' ? 'approved' : 'pending', appointment };
-    const end = start + 20 * 60_000;
-    const block = data.blocks.find(item => item.start_at < end + 10 * 60_000 && item.end_at > start);
+    const end = start + SLOT_MS;
+    const block = data.blocks.find(item => item.start_at < end + BUFFER_MS && item.end_at > start);
     if (block) return { state: 'blocked', block };
     if (start < Date.now()) return { state: 'past' };
     return { state: openSet.has(start) ? 'open' : 'closed' };
   }
 
-  async function toggleSlot(start: number, open: boolean) {
-    setBusySlots(current => new Set(current).add(start));
+  /**
+   * Saatleri tek istekte açar/kapatır ve arayüzü hemen günceller.
+   * Bir günü açmak 28 istek ve 28 yeniden yükleme demekti; artık tek tur.
+   * İstek başarısız olursa takvim sunucudan yeniden yüklenip gerçek duruma döner.
+   */
+  async function applySlots(changes: SlotChange[], describe: (count: number) => string) {
+    if (!changes.length) { notify('Değişecek saat yok.'); return; }
+    const touched = new Set(changes.map(change => change.startAt));
+    setBusySlots(current => new Set([...current, ...touched]));
     setError('');
+
+    setData(current => {
+      const slots = new Map(current.slots.map(slot => [slot.start_at, slot]));
+      for (const change of changes) {
+        if (change.open) {
+          slots.set(change.startAt, {
+            id: `optimistic-${change.startAt}`, service_id: serviceId,
+            start_at: change.startAt, end_at: change.startAt + SLOT_MS, created_at: Date.now()
+          });
+        } else {
+          slots.delete(change.startAt);
+        }
+      }
+      return { ...current, slots: [...slots.values()].sort((a, b) => a.start_at - b.start_at) };
+    });
+
     try {
-      await api('/api/admin/availability-slots', {
-        method: 'PUT', body: JSON.stringify({ serviceId, start: new Date(start).toISOString(), open })
+      await api('/api/admin/availability-slots/bulk', {
+        method: 'PUT',
+        body: JSON.stringify({
+          serviceId,
+          slots: changes.map(change => ({ start: new Date(change.startAt).toISOString(), open: change.open }))
+        })
       }, csrf);
-      notify(open ? 'Saat randevuya açıldı.' : 'Saat kapatıldı.');
+      notify(describe(changes.length));
+    } catch (err) {
+      guard(err);
       await loadData();
-    } catch (err) { guard(err); }
-    finally { setBusySlots(current => { const next = new Set(current); next.delete(start); return next; }); }
+    } finally {
+      setBusySlots(current => {
+        const next = new Set(current);
+        for (const start of touched) next.delete(start);
+        return next;
+      });
+    }
+  }
+
+  /** Bir günün değiştirilebilir saatleri için hedef durumu hesaplar; değişmeyenleri eler. */
+  function daySlotChanges(dateKey: string, target: (startAt: number) => boolean): SlotChange[] {
+    return timeOptions().flatMap(time => {
+      const startAt = toTimestamp(dateKey, time);
+      const state = stateFor(startAt).state;
+      if (LOCKED_STATES.includes(state)) return [];
+      const open = target(startAt);
+      return (state === 'open') === open ? [] : [{ startAt, open }];
+    });
+  }
+
+  /** Saat satırına tıklama. Shift ile önceki tıklamadan buraya kadarki aralık uygulanır. */
+  function onSlotClick(time: string, shiftKey: boolean) {
+    const times = timeOptions();
+    const index = times.indexOf(time);
+    const start = toTimestamp(selectedDate, time);
+    const open = stateFor(start).state !== 'open';
+    const anchorIndex = anchorTime ? times.indexOf(anchorTime) : -1;
+    setAnchorTime(time);
+
+    if (shiftKey && anchorIndex >= 0 && anchorIndex !== index) {
+      const [from, to] = anchorIndex < index ? [anchorIndex, index] : [index, anchorIndex];
+      const window = new Set(times.slice(from, to + 1));
+      const changes = daySlotChanges(selectedDate, startAt => window.has(formatTime(startAt, true)) ? open : (stateFor(startAt).state === 'open'));
+      void applySlots(changes, count => open ? `${count} saat açıldı.` : `${count} saat kapatıldı.`);
+      return;
+    }
+    void applySlots([{ startAt: start, open }], () => open ? 'Saat randevuya açıldı.' : 'Saat kapatıldı.');
+  }
+
+  function setWholeDay(open: boolean) {
+    void applySlots(
+      daySlotChanges(selectedDate, () => open),
+      count => open ? `Gün açıldı — ${count} saat.` : `Gün kapatıldı — ${count} saat.`
+    );
+  }
+
+  /**
+   * Seçili günün açık saatlerini gezilen ay içindeki hedef günlere birebir kopyalar.
+   * Randevusu olan, genel kapalı ve geçmiş saatlere dokunulmaz.
+   */
+  function planCopy(weekdays: Set<number>): { days: string[]; changes: SlotChange[] } {
+    const sourceOpen = new Set(
+      timeOptions().filter(time => stateFor(toTimestamp(selectedDate, time)).state === 'open')
+    );
+    const days: string[] = [];
+    const changes: SlotChange[] = [];
+    for (const { date, inMonth } of monthDays(month)) {
+      if (!inMonth || date === selectedDate) continue;
+      if (!weekdays.has(new Date(`${date}T00:00:00Z`).getUTCDay())) continue;
+      const dayChanges = daySlotChanges(date, startAt => sourceOpen.has(formatTime(startAt, true)));
+      if (dayChanges.length) { days.push(date); changes.push(...dayChanges); }
+    }
+    return { days, changes };
+  }
+
+  async function copyDay(weekdays: Set<number>) {
+    const { days, changes } = planCopy(weekdays);
+    setCopying(false);
+    await applySlots(changes, () => `${days.length} güne kopyalandı — ${changes.length} saat.`);
   }
 
   function openDecision(appointment: Appointment, action: DecisionAction) {
@@ -343,6 +464,12 @@ function AdminDashboard({ csrf, onExpired }: { csrf: string; onExpired: () => vo
           />
           <section className="admin-times-panel">
             <header className="times-heading"><div><h2>{formatSelectedDate(selectedDate)}</h2><span>{selectedService?.name}</span></div><TimeFormatToggle use24Hour={use24Hour} onChange={setUse24Hour} /></header>
+            <div className="day-actions">
+              <button type="button" disabled={loading} onClick={() => setWholeDay(true)}><CheckCheck size={14} /> Tümünü aç</button>
+              <button type="button" disabled={loading} onClick={() => setWholeDay(false)}><Ban size={14} /> Tümünü kapat</button>
+              <button type="button" disabled={loading} onClick={() => setCopying(true)}><CopyIcon size={14} /> Kopyala</button>
+            </div>
+            <p className="day-hint">Aralık seçmek için bir saate, sonra <kbd>Shift</kbd> ile ikinci saate tıklayın.</p>
             <div className="admin-time-list">
               {loading ? <div className="panel-state"><LoaderCircle className="spin" /> Takvim yükleniyor…</div> : timeOptions().map(time => {
                 const start = toTimestamp(selectedDate, time);
@@ -351,7 +478,7 @@ function AdminDashboard({ csrf, onExpired }: { csrf: string; onExpired: () => vo
                 const locked = ['pending', 'approved', 'blocked', 'past'].includes(info.state);
                 const label = { open: 'Açık', closed: 'Kapalı', pending: 'Onay bekliyor', approved: 'Onaylandı', blocked: 'Genel kapalı', past: 'Geçmiş' }[info.state];
                 return (
-                  <button type="button" className={`admin-time-row ${info.state}`} key={time} disabled={locked || busy} onClick={() => toggleSlot(start, info.state !== 'open')} title={info.appointment ? `${info.appointment.name} · ${info.appointment.phone}` : info.block?.reason}>
+                  <button type="button" className={`admin-time-row ${info.state}${anchorTime === time ? ' anchor' : ''}`} key={time} disabled={locked || busy} onClick={event => onSlotClick(time, event.shiftKey)} title={info.appointment ? `${info.appointment.name} · ${info.appointment.phone}` : info.block?.reason}>
                     <strong>{formatTime(start, use24Hour)}</strong>
                     <span>{info.appointment?.name || label}</span>
                     {busy ? <LoaderCircle className="spin" size={18} /> : <i aria-label={label}><b /></i>}
@@ -401,6 +528,17 @@ function AdminDashboard({ csrf, onExpired }: { csrf: string; onExpired: () => vo
           use24Hour={use24Hour}
           onClose={() => { if (!blockBusy) setBlockDraft(null); }}
           onConfirm={createBlock}
+        />
+      )}
+      {copying && (
+        <CopyDayModal
+          sourceDate={selectedDate}
+          month={month}
+          sourceOpenCount={timeOptions().filter(time => stateFor(toTimestamp(selectedDate, time)).state === 'open').length}
+          plan={planCopy}
+          busy={busySlots.size > 0}
+          onClose={() => setCopying(false)}
+          onConfirm={copyDay}
         />
       )}
       {removingBlock && (
@@ -483,6 +621,72 @@ function BlockSection({ blocks, month, loading, use24Hour, onAdd, onRemove }: {
         ))}
       </div>
     </section>
+  );
+}
+
+function CopyDayModal({ sourceDate, month, sourceOpenCount, plan, busy, onClose, onConfirm }: {
+  sourceDate: string;
+  month: string;
+  sourceOpenCount: number;
+  plan: (weekdays: Set<number>) => { days: string[]; changes: SlotChange[] };
+  busy: boolean;
+  onClose: () => void;
+  onConfirm: (weekdays: Set<number>) => void;
+}) {
+  // Varsayılan hedef, kaynak günle aynı hafta günü: haftalık düzen kurmanın en sık hâli.
+  const sourceWeekday = new Date(`${sourceDate}T00:00:00Z`).getUTCDay();
+  const [weekdays, setWeekdays] = useState<Set<number>>(new Set([sourceWeekday]));
+  const dialogRef = useModalShell(busy, onClose);
+
+  const preview = plan(weekdays);
+  const toggle = (value: number) => setWeekdays(current => {
+    const next = new Set(current);
+    if (!next.delete(value)) next.add(value);
+    return next;
+  });
+
+  return (
+    <div className="decision-backdrop" onMouseDown={event => { if (event.target === event.currentTarget && !busy) onClose(); }}>
+      <div className="decision-modal copy-modal" role="dialog" aria-modal="true" aria-labelledby="copy-title" tabIndex={-1} ref={dialogRef}>
+        <header className="decision-header">
+          <span className="decision-icon"><CopyIcon /></span>
+          <div><span className="eyebrow">Müsaitlik planı</span><h2 id="copy-title">Günü kopyala</h2></div>
+          <button type="button" className="decision-close" aria-label="Pencereyi kapat" disabled={busy} onClick={onClose}><X size={18} /></button>
+        </header>
+        <p className="decision-description">
+          <strong>{formatSelectedDate(sourceDate)}</strong> gününün {sourceOpenCount} açık saati, {formatMonth(month)} içindeki
+          seçili günlere birebir uygulanır. Randevusu olan, genel kapalı ve geçmiş saatlere dokunulmaz.
+        </p>
+
+        <div className="copy-weekdays" role="group" aria-label="Hedef günler">
+          {WEEKDAYS.map(day => (
+            <button
+              type="button"
+              key={day.value}
+              className={weekdays.has(day.value) ? 'active' : ''}
+              aria-pressed={weekdays.has(day.value)}
+              onClick={() => toggle(day.value)}
+            >{day.label}</button>
+          ))}
+        </div>
+
+        <div className={`copy-preview ${preview.changes.length ? '' : 'empty'}`}>
+          <CalendarClock />
+          <span>
+            {preview.changes.length
+              ? `${preview.days.length} gün · ${preview.changes.length} saat değişecek`
+              : 'Seçili günlerde değişecek saat yok'}
+          </span>
+        </div>
+
+        <footer className="decision-actions">
+          <button type="button" className="decision-secondary" disabled={busy} onClick={onClose}>Vazgeç</button>
+          <button type="button" className="decision-primary" disabled={busy || !preview.changes.length} onClick={() => onConfirm(weekdays)}>
+            {busy ? <><LoaderCircle className="spin" size={16} /> Uygulanıyor…</> : 'Saatleri kopyala'}
+          </button>
+        </footer>
+      </div>
+    </div>
   );
 }
 

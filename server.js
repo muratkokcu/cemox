@@ -9,13 +9,22 @@ import { createEmailService } from './src/email.js';
 
 const rootDir = path.dirname(fileURLToPath(import.meta.url));
 
+const BULK_SLOTS_PATH = '/api/admin/availability-slots/bulk';
+/** Bir aylık takvimin tamamı (31 gün x 28 saat) tek istekte sığsın diye. */
+const MAX_BULK_SLOTS = 1000;
+
 export function createApp({ config = loadConfig(), database = null, emailService = null, logger = console } = {}) {
   const db = database || createDatabase(config.databasePath);
   const email = emailService || createEmailService(config, logger);
   const app = express();
   app.disable('x-powered-by');
   app.set('trust proxy', config.production ? 1 : false);
-  app.use(express.json({ limit: '24kb' }));
+  // Genel sınır kamuya açık uçları korur; toplu slot yazımı bir aylık takvimi
+  // tek istekte taşıyabildiği için kendi sınırına sahiptir.
+  const parseJson = express.json({ limit: '24kb' });
+  const parseBulkJson = express.json({ limit: '256kb' });
+  app.use((req, res, next) =>
+    (req.path === BULK_SLOTS_PATH ? parseBulkJson : parseJson)(req, res, next));
   app.use(securityHeaders(config));
 
   const publicLimiter = createRateLimiter({ windowMs: 15 * 60 * 1000, max: 120 });
@@ -150,6 +159,29 @@ export function createApp({ config = loadConfig(), database = null, emailService
       const to = parseTimestamp(req.query.to, 'Bitiş');
       if (to <= from || to - from > 32 * 86400000) throw validationError('Takvim aralığı geçerli değil.');
       res.json({ slots: db.listAvailabilitySlots({ serviceId, from, to }) });
+    } catch (error) { next(error); }
+  });
+
+  app.put(BULK_SLOTS_PATH, requireAdmin(db), requireCsrf, (req, res, next) => {
+    try {
+      const serviceId = String(req.body?.serviceId || '');
+      assertService(serviceId);
+      const entries = req.body?.slots;
+      if (!Array.isArray(entries) || !entries.length) throw validationError('En az bir saat seçilmelidir.');
+      if (entries.length > MAX_BULK_SLOTS) throw validationError(`Tek seferde en fazla ${MAX_BULK_SLOTS} saat değiştirilebilir.`);
+
+      const now = Date.now();
+      const seen = new Set();
+      const changes = entries.map(entry => {
+        const startAt = parseTimestamp(entry?.start, 'Slot zamanı');
+        assertSlotGrid(startAt);
+        if (startAt < now) throw validationError('Geçmiş bir saat değiştirilemez.');
+        if (seen.has(startAt)) throw validationError('Aynı saat birden fazla kez gönderildi.');
+        seen.add(startAt);
+        return { startAt, endAt: startAt + BOOKING_RULES.slotMinutes * 60000, open: entry?.open === true };
+      });
+
+      res.json({ applied: db.setAvailabilitySlots({ serviceId, changes }, now) });
     } catch (error) { next(error); }
   });
 

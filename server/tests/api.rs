@@ -751,3 +751,172 @@ async fn pending_appointments_are_ordered_by_hold_expiry() {
         "karara bağlananlar randevu tarihine göre sıralanır"
     );
 }
+
+#[tokio::test]
+async fn admin_can_search_appointments_and_read_status_counts() {
+    let server = common::start().await;
+    let (cookie, csrf) = server.login().await;
+    let read = [("Cookie", cookie.as_str())];
+
+    let now = now_ms();
+    let people = [
+        ("Şule Öztürk", "sule.ozturk@example.com", "+905551112233"),
+        ("Ahmet Çağlar", "ahmet@example.com", "+905324445566"),
+        ("Iğdır Gümüş", "igdir@example.com", "+905337778899"),
+        ("Ali Veli", "ali%veli@example.com", "+905441234567"),
+    ];
+    for (index, (name, email, phone)) in people.iter().enumerate() {
+        let start_at = now + (2 + index as i64) * 86_400_000;
+        server
+            .db
+            .create_appointment(
+                &NewAppointment {
+                    service_id: "medical-fitness".into(),
+                    service_name: "Test".into(),
+                    start_at,
+                    end_at: start_at + BOOKING_RULES.slot_ms(),
+                    name: (*name).into(),
+                    email: (*email).into(),
+                    phone: (*phone).into(),
+                    note: String::new(),
+                },
+                now,
+            )
+            .expect("randevu eklenemedi");
+    }
+
+    let names = |response: &Value| -> Vec<String> {
+        response["appointments"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|item| item["name"].as_str().unwrap().to_string())
+            .collect()
+    };
+    let search = async |term: &str| -> Value {
+        server
+            .request(
+                Method::GET,
+                &format!("/api/admin/appointments?q={term}"),
+                &read,
+                None,
+            )
+            .await
+            .body
+    };
+
+    // Türkçe karakterler katlanır: ASCII yazarak da bulunur, tersi de geçerli.
+    assert_eq!(
+        names(&search("sule").await),
+        vec!["Şule Öztürk"],
+        "sule -> Şule"
+    );
+    assert_eq!(
+        names(&search("Şule").await),
+        vec!["Şule Öztürk"],
+        "Şule -> Şule"
+    );
+    assert_eq!(
+        names(&search("ozturk").await),
+        vec!["Şule Öztürk"],
+        "soyadı da katlanır"
+    );
+    assert_eq!(
+        names(&search("caglar").await),
+        vec!["Ahmet Çağlar"],
+        "caglar -> Çağlar"
+    );
+    assert_eq!(
+        names(&search("gumus").await),
+        vec!["Iğdır Gümüş"],
+        "gumus -> Gümüş"
+    );
+    assert_eq!(
+        names(&search("igdir").await),
+        vec!["Iğdır Gümüş"],
+        "büyük I ve ı aynı katlanır"
+    );
+    assert_eq!(
+        names(&search("AHMET").await),
+        vec!["Ahmet Çağlar"],
+        "büyük harf duyarsız"
+    );
+
+    // E-posta ve telefon da aranır.
+    assert_eq!(names(&search("ahmet@example").await), vec!["Ahmet Çağlar"]);
+    assert_eq!(
+        names(&search("5324445566").await),
+        vec!["Ahmet Çağlar"],
+        "telefon"
+    );
+
+    // LIKE jokerleri kaçırılır. Kayıtlardan yalnızca birinin e-postasında '%' geçiyor;
+    // kaçırma bozuk olsaydı joker olarak yorumlanıp dört kaydı da eşlerdi.
+    assert_eq!(
+        names(&search("%").await),
+        vec!["Ali Veli"],
+        "% joker değil, harf olarak aranır"
+    );
+    assert_eq!(names(&search("ali%veli").await), vec!["Ali Veli"]);
+    assert_eq!(search("_").await["total"], 0, "_ de joker sayılmamalı");
+
+    // Eşleşme yoksa boş.
+    assert_eq!(search("bulunmayan").await["total"], 0);
+
+    // Sekme sayıları durum filtresinden bağımsız, ama aramayı dikkate alır.
+    let all = server
+        .request(Method::GET, "/api/admin/appointments", &read, None)
+        .await;
+    assert_eq!(all.body["counts"]["PENDING"], 4);
+    assert_eq!(
+        all.body["counts"]["APPROVED"], 0,
+        "hiç yoksa sıfır olarak döner"
+    );
+
+    let scoped = search("sule").await;
+    assert_eq!(scoped["counts"]["PENDING"], 1, "sayaçlar aramayla daralır");
+
+    // Bir kaydı onayla; sayaçlar buna göre değişmeli.
+    let id = all.body["appointments"][0]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    server
+        .request(
+            Method::PATCH,
+            &format!("/api/admin/appointments/{id}"),
+            &[("Cookie", cookie.as_str()), ("x-csrf-token", csrf.as_str())],
+            Some(json!({ "action": "approve", "adminNote": "" })),
+        )
+        .await;
+    let after = server
+        .request(Method::GET, "/api/admin/appointments", &read, None)
+        .await;
+    assert_eq!(after.body["counts"]["PENDING"], 3);
+    assert_eq!(after.body["counts"]["APPROVED"], 1);
+    assert_eq!(after.body["total"], 4, "toplam durumdan bağımsız");
+
+    // Durum filtresi uygulanınca toplam daralır ama sayaçlar tüm dağılımı verir.
+    let pending = server
+        .request(
+            Method::GET,
+            "/api/admin/appointments?status=PENDING",
+            &read,
+            None,
+        )
+        .await;
+    assert_eq!(pending.body["total"], 3);
+    assert_eq!(pending.body["counts"]["APPROVED"], 1);
+
+    // Çok uzun arama reddedilir.
+    let long = server
+        .request(
+            Method::GET,
+            &format!("/api/admin/appointments?q={}", "a".repeat(101)),
+            &read,
+            None,
+        )
+        .await;
+    assert_eq!(long.status, 400);
+    assert_eq!(long.body["error"]["message"], "Arama metni çok uzun.");
+}

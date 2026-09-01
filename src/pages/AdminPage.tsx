@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Ban, CalendarClock, CalendarOff, Check, CheckCheck, ChevronDown, CircleCheck, CircleX, Copy as CopyIcon, Hourglass, LoaderCircle, LogOut, Plus, RefreshCw, ShieldCheck, Trash2, TriangleAlert, X } from 'lucide-react';
+import { Ban, CalendarClock, CalendarOff, Check, CheckCheck, ChevronDown, CircleCheck, CircleX, Copy as CopyIcon, Hourglass, LoaderCircle, LogOut, Plus, RefreshCw, Search, ShieldCheck, Trash2, TriangleAlert, X } from 'lucide-react';
 import { MonthCalendar } from '../components/MonthCalendar';
 import { TimeFormatToggle } from '../components/TimeFormatToggle';
 import { api, ApiError } from '../web/api';
@@ -9,7 +9,8 @@ import type { AdminSlot, Appointment, AppointmentStatus, AvailabilityBlock, Serv
 /** Takvim görünümünün verisi: gezilen ay ve seçili branşla sınırlı, sayfalanmamış. */
 type DashboardData = { slots: AdminSlot[]; monthAppointments: Appointment[]; blocks: AvailabilityBlock[] };
 /** Randevu listesi: sunucu tarafında filtrelenir ve sayfalanır. */
-type AppointmentList = { items: Appointment[]; total: number };
+type StatusCounts = Partial<Record<AppointmentStatus, number>>;
+type AppointmentList = { items: Appointment[]; total: number; counts: StatusCounts };
 
 /** server/src/config.rs içindeki BOOKING_RULES ile aynı kalmalıdır. */
 const SLOT_MS = 20 * 60_000;
@@ -125,7 +126,10 @@ function AdminDashboard({ csrf, onExpired }: { csrf: string; onExpired: () => vo
   const [selectedDate, setSelectedDate] = useState(localDateKey());
   const [data, setData] = useState<DashboardData>({ slots: [], monthAppointments: [], blocks: [] });
   const [loading, setLoading] = useState(true);
-  const [list, setList] = useState<AppointmentList>({ items: [], total: 0 });
+  const [list, setList] = useState<AppointmentList>({ items: [], total: 0, counts: {} });
+  const [search, setSearch] = useState('');
+  /** Her tuş vuruşunda istek atmamak için geciktirilmiş arama metni. */
+  const [activeSearch, setActiveSearch] = useState('');
   const [listLoading, setListLoading] = useState(true);
   const [listMoreBusy, setListMoreBusy] = useState(false);
   const [busySlots, setBusySlots] = useState<Set<number>>(new Set());
@@ -143,7 +147,8 @@ function AdminDashboard({ csrf, onExpired }: { csrf: string; onExpired: () => vo
   /** Shift ile aralık seçiminde çıpa olarak kullanılan son tıklanan saat. */
   /** Son yüklenen branş+ay; iskelet yalnızca bağlam değişince gösterilir. */
   const loadedContext = useRef('');
-  const loadedFilter = useRef<AppointmentStatus | '' | null>(null);
+  /** Son yüklenen filtre+arama; iskelet yalnızca bunlar değişince gösterilir. */
+  const loadedFilter = useRef<string | null>(null);
   const [anchorTime, setAnchorTime] = useState<string | null>(null);
   const [copying, setCopying] = useState(false);
 
@@ -193,19 +198,27 @@ function AdminDashboard({ csrf, onExpired }: { csrf: string; onExpired: () => vo
 
   useEffect(() => { loadData(); }, [loadData]);
 
+  // Yazarken her tuşta istek atılmaz; kullanıcı durunca sorgulanır.
+  useEffect(() => {
+    const timer = window.setTimeout(() => setActiveSearch(search.trim()), 300);
+    return () => window.clearTimeout(timer);
+  }, [search]);
+
   /** Listeyi baştan yükler. `count` mevcut derinliği korumak için kullanılır. */
   const loadAppointments = useCallback(async (count = PAGE_SIZE) => {
-    if (loadedFilter.current !== filter) setListLoading(true);
+    const context = `${filter}:${activeSearch}`;
+    if (loadedFilter.current !== context) setListLoading(true);
     try {
       const query = new URLSearchParams({ limit: String(Math.min(count, CALENDAR_LIMIT)), offset: '0' });
       if (filter) query.set('status', filter);
-      const result = await api<{ appointments: Appointment[]; total: number }>(`/api/admin/appointments?${query}`);
-      setList({ items: result.appointments, total: result.total });
+      if (activeSearch) query.set('q', activeSearch);
+      const result = await api<{ appointments: Appointment[]; total: number; counts: StatusCounts }>(`/api/admin/appointments?${query}`);
+      setList({ items: result.appointments, total: result.total, counts: result.counts });
     } catch (err) { guard(err); }
-    finally { loadedFilter.current = filter; setListLoading(false); }
-  }, [filter, guard]);
+    finally { loadedFilter.current = context; setListLoading(false); }
+  }, [activeSearch, filter, guard]);
 
-  // Filtre değiştiğinde liste ilk sayfadan yeniden yüklenir.
+  // Filtre veya arama değiştiğinde liste ilk sayfadan yeniden yüklenir.
   useEffect(() => { loadAppointments(); }, [loadAppointments]);
 
   async function loadMoreAppointments() {
@@ -213,8 +226,9 @@ function AdminDashboard({ csrf, onExpired }: { csrf: string; onExpired: () => vo
     try {
       const query = new URLSearchParams({ limit: String(PAGE_SIZE), offset: String(list.items.length) });
       if (filter) query.set('status', filter);
-      const result = await api<{ appointments: Appointment[]; total: number }>(`/api/admin/appointments?${query}`);
-      setList(current => ({ items: [...current.items, ...result.appointments], total: result.total }));
+      if (activeSearch) query.set('q', activeSearch);
+      const result = await api<{ appointments: Appointment[]; total: number; counts: StatusCounts }>(`/api/admin/appointments?${query}`);
+      setList(current => ({ items: [...current.items, ...result.appointments], total: result.total, counts: result.counts }));
     } catch (err) { guard(err); }
     finally { setListMoreBusy(false); }
   }
@@ -503,7 +517,10 @@ function AdminDashboard({ csrf, onExpired }: { csrf: string; onExpired: () => vo
           loading={listLoading}
           moreBusy={listMoreBusy}
           filter={filter}
+          search={search}
+          searching={search.trim() !== activeSearch}
           onFilter={setFilter}
+          onSearch={setSearch}
           onLoadMore={loadMoreAppointments}
           onDecide={openDecision}
         />
@@ -555,32 +572,60 @@ function useTicker(intervalMs: number): number {
   return now;
 }
 
-function AppointmentSection({ list, loading, moreBusy, filter, onFilter, onLoadMore, onDecide }: {
+function AppointmentSection({ list, loading, moreBusy, filter, search, searching, onFilter, onSearch, onLoadMore, onDecide }: {
   list: AppointmentList;
   loading: boolean;
   moreBusy: boolean;
   filter: AppointmentStatus | '';
+  search: string;
+  searching: boolean;
   onFilter: (value: AppointmentStatus | '') => void;
+  onSearch: (value: string) => void;
   onLoadMore: () => void;
   onDecide: (appointment: Appointment, action: DecisionAction) => void;
 }) {
   // Tutma süresi dakika çözünürlüğünde gösterildiği için yarım dakikalık tik yeterli.
   const now = useTicker(30_000);
+  // "Tümü" sekmesi durum dağılımının toplamıdır; sayaçlar aramaya göre daralır.
+  const totalCount = Object.values(list.counts).reduce((sum, count) => sum + count, 0);
+  const countOf = (value: AppointmentStatus | '') => (value ? list.counts[value] ?? 0 : totalCount);
+
   return (
     <section className="appointment-section">
       <header>
         <div><span className="eyebrow">Randevular</span><h2>Talep ve onaylar</h2></div>
-        <div className="filter-tabs">
-          {filters.map(value => (
-            <button type="button" key={value || 'all'} className={filter === value ? 'active' : ''} onClick={() => onFilter(value)}>
-              {value ? statusLabels[value] : 'Tümü'}
-            </button>
-          ))}
+        <div className="appointment-tools">
+          <div className="search-field">
+            {searching ? <LoaderCircle className="spin" size={15} /> : <Search size={15} />}
+            <input
+              type="search"
+              value={search}
+              placeholder="Ad, e-posta veya telefon ara…"
+              aria-label="Randevularda ara"
+              maxLength={100}
+              onChange={event => onSearch(event.target.value)}
+            />
+            {search && (
+              <button type="button" aria-label="Aramayı temizle" onClick={() => onSearch('')}><X size={14} /></button>
+            )}
+          </div>
+          <div className="filter-tabs">
+            {filters.map(value => (
+              <button type="button" key={value || 'all'} className={filter === value ? 'active' : ''} onClick={() => onFilter(value)}>
+                {value ? statusLabels[value] : 'Tümü'}
+                <b>{countOf(value)}</b>
+              </button>
+            ))}
+          </div>
         </div>
       </header>
       <div className="appointment-list">
         {loading && <div className="panel-state"><LoaderCircle className="spin" /> Randevular yükleniyor…</div>}
-        {!loading && !list.items.length && <div className="panel-state">Bu filtrede randevu bulunmuyor.</div>}
+        {!loading && !list.items.length && (
+          <div className="panel-state">
+            {search ? `“${search}” için randevu bulunamadı.` : 'Bu filtrede randevu bulunmuyor.'}
+          </div>
+        )}
         {!loading && list.items.map(item => (
           <AppointmentCard key={item.id} appointment={item} now={now} onDecide={onDecide} />
         ))}

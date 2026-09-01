@@ -247,9 +247,19 @@ a { color: inherit; text-decoration: none; }
 .appointment-section { margin-top: 24px; padding: 25px; background: white; border: 1px solid var(--line); border-radius: 13px; }
 .appointment-section > header { display: flex; align-items: end; justify-content: space-between; gap: 20px; margin-bottom: 20px; }
 .appointment-section h2 { margin: 5px 0 0; font-size: 21px; }
+.appointment-tools { display: flex; flex-direction: column; align-items: flex-end; gap: 10px; }
+.search-field { position: relative; display: flex; align-items: center; width: min(280px, 100%); }
+.search-field > svg:first-child { position: absolute; left: 10px; color: #9a9e97; pointer-events: none; }
+.search-field input { width: 100%; padding: 9px 30px 9px 32px; border: 1px solid var(--line); border-radius: 8px; color: var(--ink); background: white; font-family: inherit; font-size: 12px; }
+.search-field input:focus { border-color: #9da69e; outline: 3px solid rgba(35,77,56,.1); }
+.search-field input::-webkit-search-cancel-button { display: none; }
+.search-field > button { position: absolute; right: 6px; display: grid; place-items: center; width: 22px; height: 22px; padding: 0; border: 0; border-radius: 5px; color: #767a74; background: transparent; cursor: pointer; }
+.search-field > button:hover { background: #f0f1ed; }
 .filter-tabs { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
-.filter-tabs button { padding: 7px 10px; border: 1px solid var(--line); border-radius: 20px; color: var(--muted); background: white; font-size: 10px; font-weight: 700; cursor: pointer; }
+.filter-tabs button { display: inline-flex; align-items: center; gap: 5px; padding: 7px 10px; border: 1px solid var(--line); border-radius: 20px; color: var(--muted); background: white; font-size: 10px; font-weight: 700; cursor: pointer; }
 .filter-tabs button.active { border-color: var(--green); color: white; background: var(--green); }
+.filter-tabs b { padding: 1px 5px; border-radius: 9px; color: #62665f; background: #eef0ed; font-size: 9px; font-variant-numeric: tabular-nums; }
+.filter-tabs button.active b { color: white; background: rgba(255,255,255,.22); }
 .appointment-list { display: grid; gap: 9px; }
 .appointment-card { display: grid; grid-template-columns: 190px minmax(250px,1fr) auto auto; align-items: start; gap: 20px; padding: 16px; border: 1px solid #e2e3df; border-radius: 9px; }
 .appointment-date { display: flex; flex-direction: column; gap: 5px; color: #4f554e; font-size: 11px; font-weight: 700; }
@@ -397,6 +407,9 @@ a { color: inherit; text-decoration: none; }
 }
 
 @media (max-width: 760px) {
+  .appointment-tools { align-items: stretch; width: 100%; }
+  .search-field { width: 100%; }
+  .filter-tabs { justify-content: flex-start; }
   .appointment-status { align-items: flex-start; }
   .day-actions button { flex: 1 1 100%; }
   .appointment-footer { align-items: stretch; flex-direction: column; gap: 11px; }

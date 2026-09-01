@@ -1,6 +1,7 @@
 //! `src/db.js` karşılığı. Şema, sorgular ve `BEGIN IMMEDIATE` transaction sınırları
 //! Node sürümüyle birebir aynıdır.
 
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -9,7 +10,8 @@ use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use r2d2::Pool;
 use r2d2_sqlite::SqliteConnectionManager;
-use rusqlite::{Connection, OpenFlags, OptionalExtension, Row, TransactionBehavior, params};
+use rusqlite::functions::FunctionFlags;
+use rusqlite::{Connection, OpenFlags, OptionalExtension, Row, ToSql, TransactionBehavior, params};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
@@ -22,6 +24,16 @@ use crate::time::now_ms;
 /// İlk `?` her zaman `now` parametresidir.
 const ACTIVE_STATUSES: &str =
     "((status = 'PENDING' AND hold_expires_at > ?) OR status = 'APPROVED')";
+
+/// Şemadaki CHECK kısıtıyla aynı sıra; sekme sayaçlarında sıfırlar da yer alsın diye.
+pub const STATUSES: [&str; 6] = [
+    "PENDING",
+    "APPROVED",
+    "REJECTED",
+    "EXPIRED",
+    "CANCELLED",
+    "CONFLICT",
+];
 
 const APPOINTMENT_COLUMNS: &str = "id, service_id, service_name, start_at, end_at, name, email, phone, \
      note, status, hold_expires_at, created_at, decision_at, admin_note";
@@ -107,6 +119,8 @@ pub struct BusyRange {
 pub struct AppointmentQuery {
     pub status: String,
     pub service_id: String,
+    /// Ad, e-posta veya telefonda geçen serbest metin.
+    pub search: String,
     pub from: i64,
     pub to: i64,
     pub limit: i64,
@@ -115,7 +129,10 @@ pub struct AppointmentQuery {
 
 pub struct AppointmentPage {
     pub appointments: Vec<Appointment>,
+    /// Durum filtresi dahil, sayfalanmamış toplam.
     pub total: i64,
+    /// Durum filtresi hariç, duruma göre dağılım; sekme sayaçlarını besler.
+    pub counts: BTreeMap<String, i64>,
 }
 
 /// Toplu yazımda tek bir saatin hedef durumu.
@@ -170,6 +187,13 @@ impl Db {
 
         let manager = manager.with_init(|conn: &mut Connection| {
             conn.busy_timeout(Duration::from_millis(5_000))?;
+            // Arama, SQLite'ın ASCII-only LIKE'ı yerine bu katlamayı kullanır.
+            conn.create_scalar_function(
+                "fold",
+                1,
+                FunctionFlags::SQLITE_UTF8 | FunctionFlags::SQLITE_DETERMINISTIC,
+                |context| Ok(fold_text(&context.get::<String>(0)?)),
+            )?;
             // journal_mode satır döndürdüğü için pragma_update yerine query_row gerekir.
             let _mode: String =
                 conn.query_row("PRAGMA journal_mode = WAL", [], |row| row.get(0))?;
@@ -267,26 +291,74 @@ impl Db {
         let conn = self.conn()?;
         expire_pending_conn(&conn, now_ms())?;
 
-        let mut clauses: Vec<&str> = Vec::new();
-        let mut filters: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
-        if !query.status.is_empty() {
-            clauses.push("status = ?");
-            filters.push(Box::new(query.status.clone()));
-        }
+        // Durum dışındaki koşullar; sekme sayıları bunları paylaşır, böylece
+        // "Onay bekliyor (3)" o anki arama ve aralık içindeki sayıyı gösterir.
+        let mut base_clauses: Vec<String> = Vec::new();
+        let mut base_params: Vec<Box<dyn ToSql>> = Vec::new();
         if !query.service_id.is_empty() {
-            clauses.push("service_id = ?");
-            filters.push(Box::new(query.service_id.clone()));
+            base_clauses.push("service_id = ?".into());
+            base_params.push(Box::new(query.service_id.clone()));
         }
         if query.to > query.from {
-            clauses.push("start_at < ? AND end_at > ?");
-            filters.push(Box::new(query.to));
-            filters.push(Box::new(query.from));
+            base_clauses.push("start_at < ? AND end_at > ?".into());
+            base_params.push(Box::new(query.to));
+            base_params.push(Box::new(query.from));
         }
-        let where_clause = if clauses.is_empty() {
+        if !query.search.is_empty() {
+            let pattern = like_pattern(&query.search);
+            let mut branches = vec![
+                "fold(name) LIKE ? ESCAPE '\\'".to_string(),
+                "fold(email) LIKE ? ESCAPE '\\'".to_string(),
+                "phone LIKE ? ESCAPE '\\'".to_string(),
+            ];
+            base_params.push(Box::new(pattern.clone()));
+            base_params.push(Box::new(pattern.clone()));
+            base_params.push(Box::new(pattern));
+            // Telefon aranırken kullanıcı boşluk veya tire koyabilir; kayıtlar
+            // yalnızca rakam ve '+' içerdiği için sorgu da o biçime indirgenir.
+            let digits: String = query.search.chars().filter(char::is_ascii_digit).collect();
+            if digits.len() >= 3 {
+                branches.push("phone LIKE ?".to_string());
+                base_params.push(Box::new(format!("%{digits}%")));
+            }
+            base_clauses.push(format!("({})", branches.join(" OR ")));
+        }
+        let base_where = if base_clauses.is_empty() {
             String::new()
         } else {
-            format!("WHERE {}", clauses.join(" AND "))
+            format!("WHERE {}", base_clauses.join(" AND "))
         };
+        let base_refs: Vec<&dyn ToSql> = base_params.iter().map(|value| value.as_ref()).collect();
+
+        // Sekme sayıları: durum filtresi uygulanmadan, tek geçişte.
+        let mut counts: BTreeMap<String, i64> = STATUSES
+            .iter()
+            .map(|status| ((*status).to_string(), 0))
+            .collect();
+        let mut statement = conn.prepare(&format!(
+            "SELECT status, COUNT(*) FROM appointments {base_where} GROUP BY status"
+        ))?;
+        for row in statement.query_map(base_refs.as_slice(), |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+        })? {
+            let (status, count) = row?;
+            counts.insert(status, count);
+        }
+        drop(statement);
+
+        // Liste ve toplam, durum filtresi de dahil.
+        let mut list_where = base_clauses.clone();
+        let mut list_refs = base_refs.clone();
+        if !query.status.is_empty() {
+            list_where.push("status = ?".into());
+            list_refs.push(&query.status);
+        }
+        let where_clause = if list_where.is_empty() {
+            String::new()
+        } else {
+            format!("WHERE {}", list_where.join(" AND "))
+        };
+
         // Bekleyen talepler tutma süresi dolmadan karara bağlanmalıdır; bu yüzden
         // randevu tarihine değil, önce süresi dolacak olana göre sıralanırlar.
         // (hold_expires_at = created_at + 24 sa olduğundan bu aynı zamanda geliş sırasıdır.)
@@ -301,15 +373,13 @@ impl Db {
             _ => "start_at ASC, id ASC",
         };
 
-        let filter_refs: Vec<&dyn rusqlite::ToSql> =
-            filters.iter().map(|value| value.as_ref()).collect();
         let total: i64 = conn.query_row(
             &format!("SELECT COUNT(*) FROM appointments {where_clause}"),
-            filter_refs.as_slice(),
+            list_refs.as_slice(),
             |row| row.get(0),
         )?;
 
-        let mut paged = filter_refs.clone();
+        let mut paged = list_refs.clone();
         paged.push(&query.limit);
         paged.push(&query.offset);
         let sql = format!(
@@ -323,6 +393,7 @@ impl Db {
         Ok(AppointmentPage {
             appointments,
             total,
+            counts,
         })
     }
 
@@ -774,6 +845,39 @@ fn map_slot(row: &Row<'_>) -> rusqlite::Result<AvailabilitySlot> {
         end_at: row.get(3)?,
         created_at: row.get(4)?,
     })
+}
+
+/// Arama için harf katlama: Türkçe karakterler ASCII karşılıklarına indirgenir,
+/// böylece "sule" araması "Şule" kaydını da bulur. SQLite'ın `lower()` işlevi
+/// yalnızca ASCII katladığı için bu işlev SQL'e ayrıca tanıtılır.
+fn fold_text(text: &str) -> String {
+    let mut folded = String::with_capacity(text.len());
+    for character in text.chars() {
+        match character {
+            'ç' | 'Ç' => folded.push('c'),
+            'ğ' | 'Ğ' => folded.push('g'),
+            'ı' | 'I' | 'İ' | 'i' => folded.push('i'),
+            'ö' | 'Ö' => folded.push('o'),
+            'ş' | 'Ş' => folded.push('s'),
+            'ü' | 'Ü' => folded.push('u'),
+            other => folded.extend(other.to_lowercase()),
+        }
+    }
+    folded
+}
+
+/// LIKE kalıbındaki joker karakterleri kaçırır; aksi halde "%" tüm kayıtları eşlerdi.
+fn like_pattern(term: &str) -> String {
+    let mut escaped = String::with_capacity(term.len() + 2);
+    escaped.push('%');
+    for character in fold_text(term).chars() {
+        if matches!(character, '%' | '_' | '\\') {
+            escaped.push('\\');
+        }
+        escaped.push(character);
+    }
+    escaped.push('%');
+    escaped
 }
 
 fn random_token(bytes: usize) -> String {

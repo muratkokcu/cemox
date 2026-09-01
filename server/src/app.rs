@@ -552,9 +552,20 @@ async fn admin_list_appointments(
         }
     };
 
+    // Arama; ad, e-posta ve telefonda geçer. Türkçe karakterler katlanır.
+    let search = params
+        .get("q")
+        .map(|value| value.trim())
+        .unwrap_or_default()
+        .to_string();
+    if search.chars().count() > 100 {
+        return Err(AppError::validation("Arama metni çok uzun."));
+    }
+
     let query = AppointmentQuery {
         status,
         service_id,
+        search,
         from,
         to,
         limit: parse_count(&params, "limit", 200, 1, 500, "Kayıt sayısı")?,
@@ -563,9 +574,11 @@ async fn admin_list_appointments(
 
     let db = state.db.clone();
     let page = blocking(move || db.list_appointments(&query)).await?;
-    Ok(Json(
-        json!({ "appointments": page.appointments, "total": page.total }),
-    ))
+    Ok(Json(json!({
+        "appointments": page.appointments,
+        "total": page.total,
+        "counts": page.counts
+    })))
 }
 
 /// Sorgu dizesindeki isteğe bağlı tam sayı; boşsa varsayılana düşer, aralık dışıysa hata.

@@ -101,7 +101,7 @@ pub fn build_router(state: AppState) -> Router {
         )
         .route(
             "/api/admin/appointments/{id}",
-            axum::routing::patch(admin_decide_appointment),
+            axum::routing::patch(admin_decide_appointment).put(admin_update_appointment),
         )
         .route(
             "/api/admin/blocks",
@@ -608,39 +608,29 @@ fn parse_count(
     }
 }
 
-/// Panelden elle randevu oluşturur (telefonla gelen danışan için).
-/// Kamuya açık formdan farkları: bal küpü ve zamanlama kontrolleri yoktur,
-/// e-posta isteğe bağlıdır, minimum bildirim süresi aranmaz ve saatin
-/// yayınlanmış müsaitlikte olması gerekmez. Kayıt doğrudan onaylı açılır.
-async fn admin_create_appointment(
-    State(state): State<AppState>,
-    body: Bytes,
-) -> Result<Response, AppError> {
-    let payload = parse_json(&body)?;
+/// Panelden girilen randevu alanlarını doğrular. Elle oluşturma ve düzenleme
+/// aynı kuralları paylaşır: kamuya açık formdan farklı olarak bal küpü ve
+/// zamanlama kontrolleri yoktur, e-posta isteğe bağlıdır ve saatin yayınlanmış
+/// müsaitlikte olması gerekmez.
+fn validate_admin_appointment(payload: &Value) -> Result<NewAppointment, AppError> {
     if !payload.is_object() {
         return Err(AppError::validation("Geçersiz form verisi."));
     }
 
-    let service_id = as_string(&payload, "serviceId");
+    let service_id = as_string(payload, "serviceId");
     let service_name = assert_service(&service_id)?;
 
-    let start_at = timestamp_field(&payload, "start", "Randevu saati")?;
+    let start_at = timestamp_field(payload, "start", "Randevu saati")?;
     assert_slot_grid(start_at)?;
-    let now = now_ms();
-    if start_at < now {
-        return Err(AppError::validation(
-            "Geçmiş bir saate randevu oluşturulamaz.",
-        ));
-    }
-    if start_at > now + 365 * DAY_MS {
+    if start_at > now_ms() + 365 * DAY_MS {
         return Err(AppError::validation(
             "Randevu en fazla bir yıl sonrasına oluşturulabilir.",
         ));
     }
 
-    let name = normalize_text(&payload, "name", 2, 100, "Ad soyad")?;
+    let name = normalize_text(payload, "name", 2, 100, "Ad soyad")?;
 
-    let phone: String = as_string(&payload, "phone")
+    let phone: String = as_string(payload, "phone")
         .chars()
         .filter(|character| character.is_ascii_digit() || *character == '+')
         .collect();
@@ -649,14 +639,12 @@ async fn admin_create_appointment(
     }
 
     // Telefonla gelen danışanın e-postası olmayabilir; boş bırakılabilir.
-    let email = as_string(&payload, "email").trim().to_lowercase();
+    let email = as_string(payload, "email").trim().to_lowercase();
     if !email.is_empty() && (!is_valid_email(&email) || email.chars().count() > 160) {
         return Err(AppError::validation("Geçerli bir e-posta adresi girin."));
     }
 
-    let note = normalize_text(&payload, "note", 0, 500, "Kısa not")?;
-
-    let input = NewAppointment {
+    Ok(NewAppointment {
         service_id,
         service_name: service_name.to_string(),
         start_at,
@@ -664,8 +652,60 @@ async fn admin_create_appointment(
         name,
         email,
         phone,
-        note,
-    };
+        note: normalize_text(payload, "note", 0, 500, "Kısa not")?,
+    })
+}
+
+/// Mevcut bir randevuyu düzenler. Durum ve tutma süresi değişmez.
+async fn admin_update_appointment(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    body: Bytes,
+) -> Result<Json<Value>, AppError> {
+    let payload = parse_json(&body)?;
+    let input = validate_admin_appointment(&payload)?;
+
+    let db = state.db.clone();
+    let lookup = state.db.clone();
+    let lookup_id = id.clone();
+    let previous = blocking(move || lookup.get_appointment(&lookup_id))
+        .await?
+        .ok_or_else(|| AppError::not_found("Randevu bulunamadı."))?;
+
+    let (appointment, moved) =
+        blocking(move || db.update_appointment(&id, &input, now_ms())).await?;
+
+    // Bildirim yalnızca kesinleşmiş bir randevu taşındığında gider; bekleyen
+    // talep henüz karara bağlanmadığı için danışana "saatiniz değişti" denmez.
+    if moved && appointment.status == "APPROVED" && !appointment.email.is_empty() {
+        let email = state.email.clone();
+        let previous_start = previous.start_at;
+        let moved_appointment = appointment.clone();
+        tokio::spawn(async move {
+            email
+                .appointment_rescheduled(&moved_appointment, previous_start)
+                .await
+        });
+    }
+
+    Ok(Json(json!({ "appointment": appointment })))
+}
+
+/// Panelden elle randevu oluşturur (telefonla gelen danışan için).
+/// Kayıt doğrudan onaylı açılır; yönetici kararını telefonda vermiştir.
+async fn admin_create_appointment(
+    State(state): State<AppState>,
+    body: Bytes,
+) -> Result<Response, AppError> {
+    let payload = parse_json(&body)?;
+    let input = validate_admin_appointment(&payload)?;
+
+    let now = now_ms();
+    if input.start_at < now {
+        return Err(AppError::validation(
+            "Geçmiş bir saate randevu oluşturulamaz.",
+        ));
+    }
 
     let db = state.db.clone();
     let appointment =

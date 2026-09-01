@@ -551,6 +551,73 @@ impl Db {
         appointment.ok_or_else(|| AppError::internal("randevu kaydedilemedi"))
     }
 
+    /// Mevcut bir randevunun alanlarını günceller. Durum ve tutma süresi
+    /// değişmez: düzenlemek karar vermek değildir. Saat değiştiyse çakışma
+    /// kontrolü kaydın kendisi hariç tutularak yapılır.
+    /// İkinci dönüş değeri saatin değişip değişmediğidir; bildirim buna bağlıdır.
+    pub fn update_appointment(
+        &self,
+        id: &str,
+        input: &NewAppointment,
+        now: i64,
+    ) -> Result<(Appointment, bool), AppError> {
+        let mut conn = self.conn()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        expire_pending_conn(&tx, now)?;
+
+        let existing = get_appointment_conn(&tx, id)?
+            .ok_or_else(|| AppError::not_found("Randevu bulunamadı."))?;
+        if !matches!(
+            existing.status.as_str(),
+            "PENDING" | "APPROVED" | "CONFLICT"
+        ) {
+            return Err(AppError::conflict(
+                "Yalnızca bekleyen, onaylı veya çakışan randevular düzenlenebilir.",
+            ));
+        }
+
+        let moved = existing.start_at != input.start_at;
+        if moved {
+            // Geçmişe taşınamaz; ama saat değişmiyorsa geçmiş bir randevunun
+            // ad/telefon gibi alanları düzeltilebilir.
+            if input.start_at < now {
+                return Err(AppError::validation("Geçmiş bir saate taşınamaz."));
+            }
+            if !is_range_free_conn(
+                &tx,
+                input.start_at,
+                input.end_at + BOOKING_RULES.buffer_ms(),
+                now,
+                id,
+            )? {
+                return Err(AppError::conflict(
+                    "Bu saat başka bir randevu veya kapalı zamanla çakışıyor.",
+                ));
+            }
+        }
+
+        tx.execute(
+            "UPDATE appointments SET service_id = ?, service_name = ?, start_at = ?, end_at = ?, \
+             name = ?, email = ?, phone = ?, note = ? WHERE id = ?",
+            params![
+                input.service_id,
+                input.service_name,
+                input.start_at,
+                input.end_at,
+                input.name,
+                input.email,
+                input.phone,
+                input.note,
+                id
+            ],
+        )?;
+        let updated = get_appointment_conn(&tx, id)?;
+        tx.commit()?;
+        updated
+            .map(|appointment| (appointment, moved))
+            .ok_or_else(|| AppError::internal("randevu okunamadı"))
+    }
+
     /// `decideAppointment` karşılığı. İkinci dönüş değeri çakışma bayrağıdır.
     pub fn decide_appointment(
         &self,

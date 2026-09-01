@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Ban, BellRing, CalendarClock, CalendarOff, Check, CheckCheck, ChevronDown, CircleCheck, CircleX, Copy as CopyIcon, Hourglass, LoaderCircle, LogOut, Plus, RefreshCw, Search, ShieldCheck, Trash2, TriangleAlert, UserPlus, X } from 'lucide-react';
+import { Ban, BellRing, CalendarClock, CalendarOff, Check, CheckCheck, ChevronDown, CircleCheck, CircleX, Copy as CopyIcon, Hourglass, LoaderCircle, LogOut, Plus, RefreshCw, PencilLine, Search, ShieldCheck, Trash2, TriangleAlert, UserPlus, X } from 'lucide-react';
 import { MonthCalendar } from '../components/MonthCalendar';
 import { TimeFormatToggle } from '../components/TimeFormatToggle';
 import { api, ApiError } from '../web/api';
@@ -25,11 +25,18 @@ const WEEKDAYS: Array<{ label: string; value: number }> = [
 ];
 
 type SlotChange = { startAt: number; open: boolean };
-/** Telefonla gelen danışan için elle randevu girişi. */
-type ManualDraft = {
+/** Panelden randevu oluşturma ve düzenleme aynı formu paylaşır. */
+type AppointmentDraft = {
   serviceId: string; date: string; time: string;
   name: string; phone: string; email: string; note: string;
 };
+/** Düzenlemede kaydın kimliği ve mevcut saati de taşınır. */
+type AppointmentForm =
+  | { mode: 'create'; draft: AppointmentDraft }
+  | { mode: 'edit'; draft: AppointmentDraft; id: string; status: AppointmentStatus; startAt: number };
+
+/** Sonuçlanmış kayıtlar düzenlenemez; sunucudaki kuralın istemci karşılığı. */
+const EDITABLE_STATUSES: AppointmentStatus[] = ['PENDING', 'APPROVED', 'CONFLICT'];
 
 function validPhone(value: string): boolean {
   const digits = value.replace(/[^0-9]/g, '');
@@ -40,17 +47,22 @@ function validEmail(value: string): boolean {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
 }
 
-/** Tarih ve saat doğrulaması; hem önizleme hem gönderim kontrolü bunu paylaşır. */
-function manualTimeError(draft: ManualDraft): string {
+/**
+ * Tarih ve saat doğrulaması; hem önizleme hem gönderim kontrolü bunu paylaşır.
+ * `unchangedStart` düzenlemede kaydın mevcut saatidir: saat değişmiyorsa geçmiş
+ * bir randevunun ad/telefon gibi alanları düzeltilebilmelidir.
+ */
+function draftTimeError(draft: AppointmentDraft, unchangedStart?: number): string {
   const startAt = toTimestamp(draft.date, draft.time);
   if (!Number.isFinite(startAt)) return 'Geçerli bir tarih ve saat seçin.';
+  if (startAt === unchangedStart) return '';
   if (startAt < Date.now()) return 'Geçmiş bir saate randevu oluşturulamaz.';
   return '';
 }
 
 /** Gönderimi engelleyen hata; sunucudaki doğrulamanın istemci karşılığı. */
-function validateManual(draft: ManualDraft): string {
-  const timeError = manualTimeError(draft);
+function validateDraftForm(draft: AppointmentDraft, unchangedStart?: number): string {
+  const timeError = draftTimeError(draft, unchangedStart);
   if (timeError) return timeError;
   if (draft.name.trim().length < 2) return 'Ad soyad en az 2 karakter olmalıdır.';
   if (!validPhone(draft.phone)) return 'Geçerli bir telefon numarası girin.';
@@ -63,8 +75,8 @@ function validateManual(draft: ManualDraft): string {
  * verilmez — form açılır açılmaz hata göstermek yerine buton kapalı bırakılır;
  * uyarı yalnızca girilen değer hatalıysa çıkar.
  */
-function manualVisibleError(draft: ManualDraft): string {
-  const timeError = manualTimeError(draft);
+function visibleDraftError(draft: AppointmentDraft, unchangedStart?: number): string {
+  const timeError = draftTimeError(draft, unchangedStart);
   if (timeError) return timeError;
   if (draft.name.trim() && draft.name.trim().length < 2) return 'Ad soyad en az 2 karakter olmalıdır.';
   if (draft.phone.trim() && !validPhone(draft.phone)) return 'Geçerli bir telefon numarası girin.';
@@ -204,9 +216,9 @@ function AdminDashboard({ csrf, onExpired }: { csrf: string; onExpired: () => vo
   const [newRequests, setNewRequests] = useState(0);
   const [anchorTime, setAnchorTime] = useState<string | null>(null);
   const [copying, setCopying] = useState(false);
-  const [manual, setManual] = useState<ManualDraft | null>(null);
-  const [manualBusy, setManualBusy] = useState(false);
-  const [manualError, setManualError] = useState('');
+  const [form, setForm] = useState<AppointmentForm | null>(null);
+  const [formBusy, setFormBusy] = useState(false);
+  const [formError, setFormError] = useState('');
 
   const notify = useCallback((message: string) => {
     setToast(message);
@@ -549,37 +561,63 @@ function AdminDashboard({ csrf, onExpired }: { csrf: string; onExpired: () => vo
    * o saat de gelir, böylece tarih/saat seçimi yapmadan doğrudan yazmaya başlanır.
    */
   function openManual(time = '10:00') {
-    setManualError('');
-    setManual({
-      serviceId, date: selectedDate, time,
-      name: '', phone: '', email: '', note: ''
+    setFormError('');
+    setForm({
+      mode: 'create',
+      draft: { serviceId, date: selectedDate, time, name: '', phone: '', email: '', note: '' }
     });
   }
 
-  async function createManual(draft: ManualDraft) {
-    setManualBusy(true); setManualError('');
+  function openEdit(appointment: Appointment) {
+    setFormError('');
+    setForm({
+      mode: 'edit',
+      id: appointment.id,
+      status: appointment.status,
+      startAt: appointment.start_at,
+      draft: {
+        serviceId: appointment.service_id,
+        date: localDateKey(appointment.start_at),
+        time: formatTime(appointment.start_at, true),
+        name: appointment.name,
+        phone: appointment.phone,
+        email: appointment.email,
+        note: appointment.note
+      }
+    });
+  }
+
+  /** Oluşturma ve düzenleme aynı gövdeyi gönderir; yalnızca yol ve yöntem değişir. */
+  async function submitForm(draft: AppointmentDraft) {
+    if (!form) return;
+    const editing = form.mode === 'edit';
+    setFormBusy(true); setFormError('');
     try {
-      await api('/api/admin/appointments', {
-        method: 'POST',
-        body: JSON.stringify({
-          serviceId: draft.serviceId,
-          start: new Date(toTimestamp(draft.date, draft.time)).toISOString(),
-          name: draft.name.trim(),
-          phone: draft.phone.trim(),
-          email: draft.email.trim(),
-          note: draft.note.trim()
-        })
-      }, csrf);
-      setManual(null);
-      notify('Randevu oluşturuldu.');
+      await api(
+        editing ? `/api/admin/appointments/${encodeURIComponent(form.id)}` : '/api/admin/appointments',
+        {
+          method: editing ? 'PUT' : 'POST',
+          body: JSON.stringify({
+            serviceId: draft.serviceId,
+            start: new Date(toTimestamp(draft.date, draft.time)).toISOString(),
+            name: draft.name.trim(),
+            phone: draft.phone.trim(),
+            email: draft.email.trim(),
+            note: draft.note.trim()
+          })
+        },
+        csrf
+      );
+      setForm(null);
+      notify(editing ? 'Randevu güncellendi.' : 'Randevu oluşturuldu.');
       // Kayıt başka bir aya düştüyse takvimi oraya taşı, aksi halde görünmezdi.
       const targetMonth = monthKey(draft.date);
       if (targetMonth !== month) { setMonth(targetMonth); setSelectedDate(draft.date); }
       await refreshAll();
     } catch (err) {
       if (err instanceof ApiError && err.status === 401) guard(err);
-      else setManualError(err instanceof Error ? err.message : 'Randevu oluşturulamadı.');
-    } finally { setManualBusy(false); }
+      else setFormError(err instanceof Error ? err.message : 'İşlem tamamlanamadı.');
+    } finally { setFormBusy(false); }
   }
 
   async function logout() {
@@ -677,6 +715,7 @@ function AdminDashboard({ csrf, onExpired }: { csrf: string; onExpired: () => vo
           onSearch={setSearch}
           onLoadMore={loadMoreAppointments}
           onDecide={openDecision}
+          onEdit={openEdit}
           onCreate={openManual}
         />
       </main>
@@ -691,14 +730,14 @@ function AdminDashboard({ csrf, onExpired }: { csrf: string; onExpired: () => vo
           onConfirm={createBlock}
         />
       )}
-      {manual && (
-        <ManualModal
-          initial={manual}
+      {form && (
+        <AppointmentFormModal
+          form={form}
           services={services}
-          busy={manualBusy}
-          error={manualError}
-          onClose={() => { if (!manualBusy) setManual(null); }}
-          onConfirm={createManual}
+          busy={formBusy}
+          error={formError}
+          onClose={() => { if (!formBusy) setForm(null); }}
+          onConfirm={submitForm}
         />
       )}
       {copying && (
@@ -752,7 +791,7 @@ function useTicker(intervalMs: number): number {
   return now;
 }
 
-function AppointmentSection({ list, loading, moreBusy, filter, search, searching, onFilter, onSearch, onLoadMore, onDecide, onCreate }: {
+function AppointmentSection({ list, loading, moreBusy, filter, search, searching, onFilter, onSearch, onLoadMore, onDecide, onEdit, onCreate }: {
   list: AppointmentList;
   loading: boolean;
   moreBusy: boolean;
@@ -763,6 +802,7 @@ function AppointmentSection({ list, loading, moreBusy, filter, search, searching
   onSearch: (value: string) => void;
   onLoadMore: () => void;
   onDecide: (appointment: Appointment, action: DecisionAction) => void;
+  onEdit: (appointment: Appointment) => void;
   onCreate: () => void;
 }) {
   // Tutma süresi dakika çözünürlüğünde gösterildiği için yarım dakikalık tik yeterli.
@@ -816,7 +856,7 @@ function AppointmentSection({ list, loading, moreBusy, filter, search, searching
           </div>
         )}
         {!loading && list.items.map(item => (
-          <AppointmentCard key={item.id} appointment={item} now={now} onDecide={onDecide} />
+          <AppointmentCard key={item.id} appointment={item} now={now} onDecide={onDecide} onEdit={onEdit} />
         ))}
       </div>
       {!loading && list.total > 0 && (
@@ -835,10 +875,11 @@ function AppointmentSection({ list, loading, moreBusy, filter, search, searching
   );
 }
 
-function AppointmentCard({ appointment, now, onDecide }: {
+function AppointmentCard({ appointment, now, onDecide, onEdit }: {
   appointment: Appointment;
   now: number;
   onDecide: (appointment: Appointment, action: DecisionAction) => void;
+  onEdit: (appointment: Appointment) => void;
 }) {
   const decidable = ['PENDING', 'CONFLICT'].includes(appointment.status);
   // Tutma süresi yalnızca PENDING kayıtlarda işler; diğer durumlar sunucuda süresi dolmaz.
@@ -880,6 +921,9 @@ function AppointmentCard({ appointment, now, onDecide }: {
       <div className="appointment-actions">
         {decidable && <><button className="approve" onClick={() => onDecide(appointment, 'approve')}>Onayla</button><button onClick={() => onDecide(appointment, 'reject')}>Reddet</button></>}
         {appointment.status === 'APPROVED' && <button onClick={() => onDecide(appointment, 'cancel')}>İptal et</button>}
+        {EDITABLE_STATUSES.includes(appointment.status) && (
+          <button className="edit" onClick={() => onEdit(appointment)}><PencilLine size={13} /> Düzenle</button>
+        )}
       </div>
     </article>
   );
@@ -938,32 +982,38 @@ function BlockSection({ blocks, month, loading, use24Hour, onAdd, onRemove }: {
   );
 }
 
-function ManualModal({ initial, services, busy, error, onClose, onConfirm }: {
-  initial: ManualDraft;
+function AppointmentFormModal({ form, services, busy, error, onClose, onConfirm }: {
+  form: AppointmentForm;
   services: Service[];
   busy: boolean;
   error: string;
   onClose: () => void;
-  onConfirm: (draft: ManualDraft) => void;
+  onConfirm: (draft: AppointmentDraft) => void;
 }) {
-  const [draft, setDraft] = useState(initial);
+  const editing = form.mode === 'edit';
+  const [draft, setDraft] = useState(form.draft);
   const dialogRef = useModalShell(busy, onClose);
-  const update = (patch: Partial<ManualDraft>) => setDraft(current => ({ ...current, ...patch }));
-  const blocking = validateManual(draft);
-  const visibleError = manualVisibleError(draft);
+  const update = (patch: Partial<AppointmentDraft>) => setDraft(current => ({ ...current, ...patch }));
+  const unchangedStart = form.mode === 'edit' ? form.startAt : undefined;
+  const blocking = validateDraftForm(draft, unchangedStart);
+  const visibleError = visibleDraftError(draft, unchangedStart);
   const startAt = toTimestamp(draft.date, draft.time);
 
   return (
     <div className="decision-backdrop" onMouseDown={event => { if (event.target === event.currentTarget && !busy) onClose(); }}>
       <div className="decision-modal manual-modal" role="dialog" aria-modal="true" aria-labelledby="manual-title" tabIndex={-1} ref={dialogRef}>
         <header className="decision-header">
-          <span className="decision-icon"><UserPlus /></span>
-          <div><span className="eyebrow">Elle giriş</span><h2 id="manual-title">Telefonla randevu ekle</h2></div>
+          <span className="decision-icon">{editing ? <PencilLine /> : <UserPlus />}</span>
+          <div>
+            <span className="eyebrow">{editing ? 'Randevu düzenleme' : 'Elle giriş'}</span>
+            <h2 id="manual-title">{editing ? 'Randevuyu düzenle' : 'Telefonla randevu ekle'}</h2>
+          </div>
           <button type="button" className="decision-close" aria-label="Pencereyi kapat" disabled={busy} onClick={onClose}><X size={18} /></button>
         </header>
         <p className="decision-description">
-          Kayıt doğrudan onaylı olarak açılır. Yayınlanmamış bir saati de verebilirsiniz;
-          yalnızca başka bir randevu veya kapalı zamanla çakışamaz.
+          {editing
+            ? 'Randevunun durumu değişmez. Saati değiştirirseniz onaylı randevularda danışana bilgilendirme e-postası gider.'
+            : 'Kayıt doğrudan onaylı olarak açılır. Yayınlanmamış bir saati de verebilirsiniz; yalnızca başka bir randevu veya kapalı zamanla çakışamaz.'}
         </p>
 
         <div className="manual-fields">
@@ -991,7 +1041,7 @@ function ManualModal({ initial, services, busy, error, onClose, onConfirm }: {
           </label>
         </div>
 
-        {!manualTimeError(draft) && (
+        {!draftTimeError(draft, unchangedStart) && (
           <div className="manual-preview">
             <CalendarClock />
             <span>{formatDateTime(startAt)}</span>
@@ -1008,7 +1058,9 @@ function ManualModal({ initial, services, busy, error, onClose, onConfirm }: {
         <footer className="decision-actions">
           <button type="button" className="decision-secondary" disabled={busy} onClick={onClose}>Vazgeç</button>
           <button type="button" className="decision-primary" disabled={busy || !!blocking} onClick={() => onConfirm(draft)}>
-            {busy ? <><LoaderCircle className="spin" size={16} /> Oluşturuluyor…</> : 'Randevuyu oluştur'}
+            {busy
+              ? <><LoaderCircle className="spin" size={16} /> {editing ? 'Kaydediliyor…' : 'Oluşturuluyor…'}</>
+              : (editing ? 'Değişiklikleri kaydet' : 'Randevuyu oluştur')}
           </button>
         </footer>
       </div>

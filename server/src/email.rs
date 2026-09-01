@@ -188,6 +188,24 @@ impl EmailService {
         .await;
     }
 
+    pub async fn appointment_rescheduled(&self, appointment: &Appointment, previous_start: i64) {
+        self.send(
+            &appointment.email,
+            "Randevunuz yeni bir saate alındı",
+            format!(
+                "<p>Merhaba {name},</p><p><strong>{service}</strong> için <strong>{previous}</strong> tarihindeki telefon ön görüşmeniz \
+                 <strong>{next}</strong> tarihine alındı.</p>\
+                 <p>Cem Avat yeni randevu saatinde kayıt sırasında verdiğiniz telefon numarasından sizi arayacaktır.</p>\
+                 <p>Uygun değilse <a href=\"tel:+905512327468\">telefon</a> ya da <a href=\"https://wa.me/905512327468\">WhatsApp</a> üzerinden bize ulaşın.</p>",
+                name = escape_html(&appointment.name),
+                service = escape_html(&appointment.service_name),
+                previous = format_date_time_long(previous_start),
+                next = format_date_time_long(appointment.start_at),
+            ),
+        )
+        .await;
+    }
+
     pub async fn appointment_cancelled(&self, appointment: &Appointment) {
         self.send(
             &appointment.email,

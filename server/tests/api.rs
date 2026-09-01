@@ -1120,3 +1120,204 @@ async fn admin_can_create_an_appointment_by_hand() {
         .await;
     assert!(!slot_starts(&availability.body).contains(&to_iso_string(start_at)));
 }
+
+#[tokio::test]
+async fn admin_can_edit_and_reschedule_an_appointment() {
+    let server = common::start().await;
+    let (cookie, csrf) = server.login().await;
+    let headers = [("Cookie", cookie.as_str()), ("x-csrf-token", csrf.as_str())];
+    let read = [("Cookie", cookie.as_str())];
+
+    let now = now_ms();
+    let local = civil_from_ms(now + BOOKING_RULES.offset_ms());
+    let slot = |day: i64, hour: i64, minute: i64| -> i64 {
+        utc_ms_hm(
+            local.year,
+            local.month as i64 - 1,
+            local.day as i64 + day,
+            hour,
+            minute,
+        ) - BOOKING_RULES.offset_ms()
+    };
+
+    let create = async |start: i64, name: &str, phone: &str| -> Value {
+        server
+            .request(
+                Method::POST,
+                "/api/admin/appointments",
+                &headers,
+                Some(json!({
+                    "serviceId": "medical-fitness", "start": to_iso_string(start),
+                    "name": name, "phone": phone, "email": "duzenle@example.com"
+                })),
+            )
+            .await
+            .body["appointment"]
+            .clone()
+    };
+    let update = async |id: &str, body: Value| -> common::ApiResponse {
+        server
+            .request(
+                Method::PUT,
+                &format!("/api/admin/appointments/{id}"),
+                &headers,
+                Some(body),
+            )
+            .await
+    };
+
+    let original = create(slot(3, 14, 0), "İlk Ad", "+905551110000").await;
+    let id = original["id"].as_str().unwrap().to_string();
+
+    // Saat değişmeden alan düzeltmesi.
+    let renamed = update(
+        &id,
+        json!({
+            "serviceId": "medical-fitness", "start": to_iso_string(slot(3, 14, 0)),
+            "name": "Düzeltilmiş Ad", "phone": "+905559998877",
+            "email": "yeni@example.com", "note": "Notu da güncelledik."
+        }),
+    )
+    .await;
+    assert_eq!(renamed.status, 200, "{:?}", renamed.body);
+    assert_eq!(renamed.body["appointment"]["name"], "Düzeltilmiş Ad");
+    assert_eq!(renamed.body["appointment"]["phone"], "+905559998877");
+    assert_eq!(renamed.body["appointment"]["email"], "yeni@example.com");
+    assert_eq!(renamed.body["appointment"]["note"], "Notu da güncelledik.");
+    assert_eq!(
+        renamed.body["appointment"]["status"], "APPROVED",
+        "düzenlemek karar vermek değildir, durum korunur"
+    );
+
+    // Boş saate taşıma.
+    let moved = update(
+        &id,
+        json!({
+            "serviceId": "kisisel-antrenman", "start": to_iso_string(slot(4, 16, 30)),
+            "name": "Düzeltilmiş Ad", "phone": "+905559998877", "email": "yeni@example.com"
+        }),
+    )
+    .await;
+    assert_eq!(moved.status, 200, "{:?}", moved.body);
+    assert_eq!(moved.body["appointment"]["start_at"], slot(4, 16, 30));
+    assert_eq!(moved.body["appointment"]["service_id"], "kisisel-antrenman");
+    assert_eq!(
+        moved.body["appointment"]["service_name"],
+        "Kişisel Antrenman"
+    );
+
+    // Eski saat serbest kaldı: oraya yeni bir randevu girilebiliyor.
+    let neighbour = create(slot(3, 14, 0), "Eski Saati Alan", "+905552220000").await;
+    assert!(neighbour["id"].is_string(), "taşınan saat boşalmalı");
+
+    // Dolu bir saate taşınamaz.
+    let clash = update(
+        &id,
+        json!({
+            "serviceId": "medical-fitness", "start": to_iso_string(slot(3, 14, 0)),
+            "name": "Düzeltilmiş Ad", "phone": "+905559998877"
+        }),
+    )
+    .await;
+    assert_eq!(clash.status, 409);
+    assert_eq!(
+        clash.body["error"]["message"],
+        "Bu saat başka bir randevu veya kapalı zamanla çakışıyor."
+    );
+
+    // Kendi saatinde bırakmak çakışma sayılmaz (kayıt kendisi hariç tutulur).
+    let same = update(
+        &id,
+        json!({
+            "serviceId": "kisisel-antrenman", "start": to_iso_string(slot(4, 16, 30)),
+            "name": "Aynı Saat", "phone": "+905559998877"
+        }),
+    )
+    .await;
+    assert_eq!(same.status, 200, "{:?}", same.body);
+
+    // Geçmişe taşınamaz.
+    let past = update(
+        &id,
+        json!({
+            "serviceId": "kisisel-antrenman", "start": "2020-01-01T07:00:00.000Z",
+            "name": "Aynı Saat", "phone": "+905559998877"
+        }),
+    )
+    .await;
+    assert_eq!(past.status, 400);
+    assert_eq!(past.body["error"]["message"], "Geçmiş bir saate taşınamaz.");
+
+    // Sonuçlanmış kayıtlar düzenlenemez.
+    let cancel_id = neighbour["id"].as_str().unwrap();
+    server
+        .request(
+            Method::PATCH,
+            &format!("/api/admin/appointments/{cancel_id}"),
+            &headers,
+            Some(json!({ "action": "cancel", "adminNote": "" })),
+        )
+        .await;
+    let terminal = update(
+        cancel_id,
+        json!({
+            "serviceId": "medical-fitness", "start": to_iso_string(slot(5, 10, 0)),
+            "name": "İptal Edilmiş", "phone": "+905552220000"
+        }),
+    )
+    .await;
+    assert_eq!(terminal.status, 409);
+    assert_eq!(
+        terminal.body["error"]["message"],
+        "Yalnızca bekleyen, onaylı veya çakışan randevular düzenlenebilir."
+    );
+
+    // Olmayan kayıt.
+    let missing = update(
+        "yok-boyle-bir-id",
+        json!({
+            "serviceId": "medical-fitness", "start": to_iso_string(slot(5, 10, 0)),
+            "name": "Yok", "phone": "+905553330000"
+        }),
+    )
+    .await;
+    assert_eq!(missing.status, 404);
+
+    // CSRF başlığı olmadan düzenlenemez.
+    let no_csrf = server
+        .request(
+            Method::PUT,
+            &format!("/api/admin/appointments/{id}"),
+            &read,
+            Some(json!({
+                "serviceId": "medical-fitness", "start": to_iso_string(slot(5, 10, 0)),
+                "name": "Yetkisiz", "phone": "+905554440000"
+            })),
+        )
+        .await;
+    assert_eq!(no_csrf.status, 403);
+
+    // Doğrulamalar oluşturma ile aynı.
+    for (body, message) in [
+        (
+            json!({ "serviceId": "yok", "start": to_iso_string(slot(5, 10, 0)), "name": "Ad", "phone": "+905550000000" }),
+            "Geçerli bir hizmet seçin.",
+        ),
+        (
+            json!({ "serviceId": "medical-fitness", "start": to_iso_string(slot(5, 10, 7)), "name": "Ad", "phone": "+905550000000" }),
+            "Slot 30 dakikalık takvime uygun değil.",
+        ),
+        (
+            json!({ "serviceId": "medical-fitness", "start": to_iso_string(slot(5, 10, 0)), "name": "A", "phone": "+905550000000" }),
+            "Ad soyad alanı 2–100 karakter olmalıdır.",
+        ),
+        (
+            json!({ "serviceId": "medical-fitness", "start": to_iso_string(slot(5, 10, 0)), "name": "Ad Soyad", "phone": "123" }),
+            "Geçerli bir telefon numarası girin.",
+        ),
+    ] {
+        let response = update(&id, body).await;
+        assert_eq!(response.status, 400, "{:?}", response.body);
+        assert_eq!(response.body["error"]["message"], message);
+    }
+}

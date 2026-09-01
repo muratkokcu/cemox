@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Ban, CalendarClock, CalendarOff, Check, CheckCheck, ChevronDown, CircleCheck, CircleX, Copy as CopyIcon, Hourglass, LoaderCircle, LogOut, Plus, RefreshCw, Search, ShieldCheck, Trash2, TriangleAlert, X } from 'lucide-react';
+import { Ban, BellRing, CalendarClock, CalendarOff, Check, CheckCheck, ChevronDown, CircleCheck, CircleX, Copy as CopyIcon, Hourglass, LoaderCircle, LogOut, Plus, RefreshCw, Search, ShieldCheck, Trash2, TriangleAlert, X } from 'lucide-react';
 import { MonthCalendar } from '../components/MonthCalendar';
 import { TimeFormatToggle } from '../components/TimeFormatToggle';
 import { api, ApiError } from '../web/api';
@@ -25,6 +25,10 @@ const WEEKDAYS: Array<{ label: string; value: number }> = [
 ];
 
 type SlotChange = { startAt: number; open: boolean };
+
+/** Yeni talep yoklaması. Arka plandaki sekmede tarayıcı zaten kısıtlar. */
+const POLL_MS = 60_000;
+const PAGE_TITLE = 'Cem Avat · Randevu';
 
 const PAGE_SIZE = 25;
 /** Takvim bir ayı kapsar; sunucu üst sınırı 500. */
@@ -149,6 +153,9 @@ function AdminDashboard({ csrf, onExpired }: { csrf: string; onExpired: () => vo
   const loadedContext = useRef('');
   /** Son yüklenen filtre+arama; iskelet yalnızca bunlar değişince gösterilir. */
   const loadedFilter = useRef<string | null>(null);
+  /** Kullanıcının en son gördüğü bekleyen talep sayısı; yoklama bunun üstüne bakar. */
+  const seenPending = useRef<number | null>(null);
+  const [newRequests, setNewRequests] = useState(0);
   const [anchorTime, setAnchorTime] = useState<string | null>(null);
   const [copying, setCopying] = useState(false);
 
@@ -233,10 +240,56 @@ function AdminDashboard({ csrf, onExpired }: { csrf: string; onExpired: () => vo
     finally { setListMoreBusy(false); }
   }
 
+  /**
+   * Filtresiz bekleyen talep sayısı. Yoklama sessizdir: hata kullanıcıya
+   * gösterilmez, yalnızca oturum düştüyse giriş ekranına dönülür.
+   */
+  const fetchPendingCount = useCallback(async (): Promise<number | null> => {
+    try {
+      const result = await api<{ counts: StatusCounts }>('/api/admin/appointments?limit=1');
+      return result.counts.PENDING ?? 0;
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 401) onExpired();
+      return null;
+    }
+  }, [onExpired]);
+
+  /** Bildirimi kapatır ve yeni talep ölçümünü şu ana sabitler. */
+  const markPendingSeen = useCallback(async () => {
+    const count = await fetchPendingCount();
+    if (count !== null) seenPending.current = count;
+    setNewRequests(0);
+  }, [fetchPendingCount]);
+
   /** Karar sonrası hem takvimi hem listeyi tazeler; liste derinliği korunur. */
   const refreshAll = useCallback(async () => {
     await Promise.all([loadData(), loadAppointments(Math.max(PAGE_SIZE, list.items.length))]);
-  }, [loadData, loadAppointments, list.items.length]);
+    // Karar bekleyen sayısını değiştirir; ölçüm yeniden sabitlenmezse
+    // sonraki yeni talep fark edilmezdi.
+    await markPendingSeen();
+  }, [loadData, loadAppointments, list.items.length, markPendingSeen]);
+
+  // Yeni talepleri yoklar. Liste kendiliğinden değiştirilmez: kullanıcı bir
+  // randevuyu onaylamak üzereyken kartlar kayarsa yanlış kayıt onaylanabilir.
+  // Bunun yerine bildirim gösterilir, uygulama kararı kullanıcıya bırakılır.
+  useEffect(() => {
+    let cancelled = false;
+    const poll = async () => {
+      const count = await fetchPendingCount();
+      if (cancelled || count === null) return;
+      if (seenPending.current === null) { seenPending.current = count; return; }
+      setNewRequests(Math.max(0, count - seenPending.current));
+    };
+    poll();
+    const timer = window.setInterval(poll, POLL_MS);
+    return () => { cancelled = true; window.clearInterval(timer); };
+  }, [fetchPendingCount]);
+
+  // Sekme arka plandayken de görünsün diye sayfa başlığına yansıtılır.
+  useEffect(() => {
+    document.title = newRequests ? `(${newRequests}) ${PAGE_TITLE}` : PAGE_TITLE;
+    return () => { document.title = PAGE_TITLE; };
+  }, [newRequests]);
 
   const openSet = useMemo(() => new Set(data.slots.map(slot => slot.start_at)), [data.slots]);
   const dateTones = useMemo(() => {
@@ -556,6 +609,21 @@ function AdminDashboard({ csrf, onExpired }: { csrf: string; onExpired: () => vo
           onClose={() => { if (!blockBusy) setRemovingBlock(null); }}
           onConfirm={() => removeBlock(removingBlock)}
         />
+      )}
+      {newRequests > 0 && (
+        <button
+          type="button"
+          className="new-requests"
+          onClick={async () => {
+            setFilter('PENDING');
+            await refreshAll();
+            document.querySelector('.appointment-section')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+          }}
+        >
+          <BellRing size={15} />
+          {newRequests === 1 ? '1 yeni randevu talebi' : `${newRequests} yeni randevu talebi`}
+          <span>Göster</span>
+        </button>
       )}
       {toast && <div className="toast" role="status"><Check size={17} /> {toast}</div>}
     </div>

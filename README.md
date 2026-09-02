@@ -111,6 +111,18 @@ görünür — sessiz bozulmayı fark etmek için.
 
 `GOOGLE_SERVICE_ACCOUNT` tanımlı değilse senkron tamamen kapalıdır.
 
+Kurulumu gerçek Google'a karşı sınamak için — bir deneme etkinliği oluşturup
+taşıyıp siler, takvimde iz bırakmaz:
+
+```
+GOOGLE_SERVICE_ACCOUNT=anahtar.json \
+  cargo run --manifest-path server/Cargo.toml \
+  --example calendar_smoke -- takvim@gmail.com
+```
+
+Hata verirse nedenini söyler: takvim paylaşılmamışsa Google 404 döndürür — servis
+hesapları paylaşılmayan takvimi "yok" olarak görür, "izin yok" demez.
+
 TLS yapılandırmasını yeni bir ortamda doğrulamak için:
 `cargo run --manifest-path server/Cargo.toml --example tls_smoke`
 

@@ -1,9 +1,14 @@
-//! `test/app.test.js` içindeki `createTestServer` yardımcısının karşılığı.
+//! Testlerin paylaştığı sunucu yardımcısı.
+//!
+//! Bu modül her test ikilisi için ayrı derlenir ve her biri yardımcıların
+//! yalnızca bir kısmını kullanır; kullanılmayanlar bu yüzden hata sayılmaz.
+#![allow(dead_code)]
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
 
 use cemox_server::app::{AppState, build_router};
+use cemox_server::calendar::GoogleCalendar;
 use cemox_server::config::{BOOKING_RULES, load_config};
 use cemox_server::db::Db;
 use cemox_server::email::EmailService;
@@ -79,11 +84,15 @@ fn seed_availability(db: &Db) {
 }
 
 pub async fn start() -> TestServer {
+    start_with_calendar(None).await
+}
+
+pub async fn start_with_calendar(calendar: Option<std::sync::Arc<GoogleCalendar>>) -> TestServer {
     let config = load_config(&test_env()).expect("yapılandırma yüklenemedi");
     let db = Db::new(":memory:").expect("veritabanı açılamadı");
     seed_availability(&db);
 
-    let state = AppState::new(config, db.clone(), EmailService::disabled());
+    let state = AppState::with_calendar(config, db.clone(), EmailService::disabled(), calendar);
     let router = build_router(state);
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
@@ -109,8 +118,10 @@ pub async fn start() -> TestServer {
 pub struct ApiResponse {
     pub status: u16,
     pub body: Value,
-    /// JSON olmayan yanıtlar (CSV, iCal) için ham gövde.
+    /// JSON olmayan yanıtlar (CSV, iCal) için çözülmüş gövde.
+    /// Dikkat: UTF-8 çözücü baştaki BOM'u kırpar; BOM'u sınamak için `bytes`.
     pub text: String,
+    pub bytes: Vec<u8>,
     pub set_cookie: Option<String>,
 }
 
@@ -140,7 +151,8 @@ impl TestServer {
             .get("set-cookie")
             .and_then(|value| value.to_str().ok())
             .map(|value| value.split(';').next().unwrap_or("").to_string());
-        let text = response.text().await.unwrap_or_default();
+        let bytes = response.bytes().await.unwrap_or_default().to_vec();
+        let text = String::from_utf8_lossy(&bytes).into_owned();
         let body = if text.is_empty() {
             Value::Null
         } else {
@@ -150,6 +162,7 @@ impl TestServer {
             status,
             body,
             text,
+            bytes,
             set_cookie,
         }
     }

@@ -1563,11 +1563,13 @@ async fn admin_can_export_appointments_as_csv_and_ical() {
     // ---- CSV ----
     let csv = export("?format=csv").await;
     assert_eq!(csv.status, 200);
-    let text = csv.text.clone();
-    assert!(
-        text.starts_with('\u{feff}'),
+    // BOM baytlar üzerinden sınanır: UTF-8 çözücüler onu metinden kırpar.
+    assert_eq!(
+        &csv.bytes[..3],
+        &[0xEF, 0xBB, 0xBF],
         "Excel'in Türkçe karakterleri okuması için BOM gerekir"
     );
+    let text = csv.text.clone();
     let lines: Vec<&str> = text.trim_end().split("\r\n").collect();
     assert_eq!(lines.len(), 3, "başlık + iki kayıt");
     assert!(

@@ -16,6 +16,7 @@ Rust (axum + rusqlite) API, SQLite veritabanı.
 - Yönetim panelinden tatil/izin için tarih ve saat kapatma
 - Sunucu tarafında filtrelenen ve sayfalanan randevu listesi
 - SMTP üzerinden rezervasyon ve durum e-postaları
+- Onaylı randevuların antrenörün Google Takvimine yazılması
 - Panelden şifre değiştirme ve yönetici işlemlerinin kaydı
 - SQLite transaction, admin session, CSRF, origin kontrolü ve rate limiting
 
@@ -82,6 +83,36 @@ docker compose up -d --build
 üzerine kopyalanır. SQLite ikiliye gömülüdür, ek sistem paketi gerekmez.
 
 SQLite verisi `cemox-data` volume’unda saklanır. Üretimde uygulamanın önüne HTTPS sağlayan bir reverse proxy yerleştirin ve volume’u düzenli yedekleyin.
+
+## Google Takvim
+
+Onaylı randevular antrenörün Google Takvimine yazılır; taşındığında güncellenir,
+iptal edildiğinde silinir. Hatırlatıcılar takvimin kendi ayarına bırakılır, yani
+telefonun yerel bildirimleri çalışır.
+
+Kullanıcı OAuth'u yerine **servis hesabı** kullanılır. Bunun sebebi işlemsel:
+OAuth onay ekranı "Test" durumundayken yenileme jetonları yedi günde bir iptal
+ediliyor, süresiz olması için Google'ın doğrulama sürecinden geçmek gerekiyor.
+Servis hesabında bu yok — erişim jetonu kendi anahtarından üretiliyor.
+
+Kurulum:
+
+1. Google Cloud'da bir proje açıp Calendar API'yi etkinleştirin.
+2. Servis hesabı oluşturup JSON anahtarını indirin, `GOOGLE_SERVICE_ACCOUNT`
+   olarak tanımlayın (dosya yolu veya JSON'un kendisi).
+3. Antrenör kendi Google Takvimini servis hesabının e-postasıyla paylaşsın,
+   izin **“Etkinliklerde değişiklik yap”** olsun.
+4. Panelde **Güvenlik → Takvim** sekmesinden takvim kimliğini girip senkronu açın.
+
+Senkron **uzlaştırma** ile çalışır: her randevu için istenen durum baştan
+hesaplanır ve fark kapatılır. Geçici bir hata kalıcı tutarsızlığa dönüşmez;
+bakım turu kuyruğu yeniden işler. Panelde son başarılı senkron ve varsa son hata
+görünür — sessiz bozulmayı fark etmek için.
+
+`GOOGLE_SERVICE_ACCOUNT` tanımlı değilse senkron tamamen kapalıdır.
+
+TLS yapılandırmasını yeni bir ortamda doğrulamak için:
+`cargo run --manifest-path server/Cargo.toml --example tls_smoke`
 
 ## Güvenlik
 

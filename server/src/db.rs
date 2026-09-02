@@ -40,7 +40,7 @@ const DEFAULT_START_MINUTE: i64 = 8 * 60;
 const DEFAULT_END_MINUTE: i64 = 22 * 60;
 
 const APPOINTMENT_COLUMNS: &str = "id, service_id, service_name, start_at, end_at, name, email, phone, \
-     note, status, hold_expires_at, created_at, decision_at, admin_note";
+     note, status, hold_expires_at, created_at, decision_at, admin_note, calendar_event_id, calendar_synced";
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Appointment {
@@ -58,6 +58,10 @@ pub struct Appointment {
     pub created_at: i64,
     pub decision_at: Option<i64>,
     pub admin_note: String,
+    /// Google Takvim etkinliğinin kimliği; senkron kurulmamışsa boş.
+    pub calendar_event_id: String,
+    /// 0 ise bu kayıt için takvim durumu yeniden hesaplanmalıdır.
+    pub calendar_synced: bool,
 }
 
 fn map_appointment(row: &Row<'_>) -> rusqlite::Result<Appointment> {
@@ -76,6 +80,8 @@ fn map_appointment(row: &Row<'_>) -> rusqlite::Result<Appointment> {
         created_at: row.get(11)?,
         decision_at: row.get(12)?,
         admin_note: row.get(13)?,
+        calendar_event_id: row.get(14)?,
+        calendar_synced: row.get::<_, i64>(15)? != 0,
     })
 }
 
@@ -137,6 +143,15 @@ pub struct AppointmentPage {
     pub total: i64,
     /// Durum filtresi hariç, duruma göre dağılım; sekme sayaçlarını besler.
     pub counts: BTreeMap<String, i64>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CalendarSettings {
+    pub calendar_id: String,
+    pub enabled: bool,
+    pub last_ok_at: Option<i64>,
+    pub last_error: String,
+    pub last_error_at: Option<i64>,
 }
 
 pub struct StoredPassword {
@@ -306,6 +321,18 @@ impl Db {
             -- Yönetici şifresi. Kayıt yoksa ortam değişkenindeki değer geçerlidir;
             -- panelden değiştirildiğinde buraya yazılır ve ortam değişkeni yalnızca
             -- ilk kurulum varsayılanı hâline gelir.
+            -- Google Takvim senkronunun durumu. Servis hesabı anahtarı burada
+            -- tutulmaz; o, SMTP bilgileri gibi ortam değişkeninden gelir ve
+            -- veritabanı yedeklerine düşmez.
+            CREATE TABLE IF NOT EXISTS calendar_sync (
+              id INTEGER PRIMARY KEY CHECK(id = 1),
+              calendar_id TEXT NOT NULL DEFAULT '',
+              enabled INTEGER NOT NULL DEFAULT 0,
+              last_ok_at INTEGER,
+              last_error TEXT NOT NULL DEFAULT '',
+              last_error_at INTEGER
+            );
+
             CREATE TABLE IF NOT EXISTS admin_password (
               id INTEGER PRIMARY KEY CHECK(id = 1),
               salt TEXT NOT NULL,
@@ -333,6 +360,25 @@ impl Db {
             CREATE INDEX IF NOT EXISTS idx_sessions_expiry ON admin_sessions(expires_at);
             "#,
         )?;
+
+        // Takvim senkronu için randevu satırlarına iki alan eklenir. Şema
+        // `CREATE TABLE IF NOT EXISTS` ile kurulduğundan mevcut veritabanları
+        // bunları almaz; sütunlar ayrıca ve yalnızca eksikse eklenir.
+        let conn = self.conn()?;
+        add_column_if_missing(
+            &conn,
+            "appointments",
+            "calendar_event_id",
+            "TEXT NOT NULL DEFAULT ''",
+        )?;
+        add_column_if_missing(
+            &conn,
+            "appointments",
+            "calendar_synced",
+            "INTEGER NOT NULL DEFAULT 1",
+        )?;
+        conn.execute("INSERT OR IGNORE INTO calendar_sync (id) VALUES (1)", [])?;
+        drop(conn);
 
         // Varsayılan pencere önceki sabit davranışla aynı: her gün 08:00–22:00.
         // `OR IGNORE` sayesinde yeniden başlatmada mevcut ayarlar korunur.
@@ -907,6 +953,93 @@ impl Db {
         set_availability_slot_conn(&conn, service_id, start_at, end_at, open, now)
     }
 
+    // ---- takvim senkronu --------------------------------------------------
+
+    pub fn calendar_settings(&self) -> Result<CalendarSettings, AppError> {
+        let conn = self.conn()?;
+        conn.query_row(
+            "SELECT calendar_id, enabled, last_ok_at, last_error, last_error_at \
+             FROM calendar_sync WHERE id = 1",
+            [],
+            |row| {
+                Ok(CalendarSettings {
+                    calendar_id: row.get(0)?,
+                    enabled: row.get::<_, i64>(1)? != 0,
+                    last_ok_at: row.get(2)?,
+                    last_error: row.get(3)?,
+                    last_error_at: row.get(4)?,
+                })
+            },
+        )
+        .map_err(AppError::from)
+    }
+
+    pub fn set_calendar_settings(&self, calendar_id: &str, enabled: bool) -> Result<(), AppError> {
+        let conn = self.conn()?;
+        conn.execute(
+            "UPDATE calendar_sync SET calendar_id = ?, enabled = ? WHERE id = 1",
+            params![calendar_id, i64::from(enabled)],
+        )?;
+        Ok(())
+    }
+
+    pub fn record_calendar_result(&self, error: Option<&str>, now: i64) -> Result<(), AppError> {
+        let conn = self.conn()?;
+        match error {
+            None => conn.execute(
+                "UPDATE calendar_sync SET last_ok_at = ?, last_error = '', last_error_at = NULL WHERE id = 1",
+                params![now],
+            )?,
+            Some(message) => conn.execute(
+                "UPDATE calendar_sync SET last_error = ?, last_error_at = ? WHERE id = 1",
+                params![message, now],
+            )?,
+        };
+        Ok(())
+    }
+
+    /// Takvim durumu yeniden hesaplanması gereken randevular.
+    /// Uzlaştırma hem işlem sonrası hem de bakım sırasında bunu tarar,
+    /// böylece geçici bir hata kalıcı tutarsızlığa dönüşmez.
+    pub fn appointments_needing_calendar_sync(
+        &self,
+        limit: i64,
+    ) -> Result<Vec<Appointment>, AppError> {
+        let conn = self.conn()?;
+        let sql = format!(
+            "SELECT {APPOINTMENT_COLUMNS} FROM appointments \
+             WHERE calendar_synced = 0 ORDER BY start_at ASC LIMIT ?"
+        );
+        let mut statement = conn.prepare(&sql)?;
+        let rows = statement.query_map(params![limit], map_appointment)?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    /// Randevuyu senkron kuyruğuna alır.
+    pub fn mark_calendar_dirty(&self, id: &str) -> Result<(), AppError> {
+        let conn = self.conn()?;
+        conn.execute(
+            "UPDATE appointments SET calendar_synced = 0 WHERE id = ?",
+            params![id],
+        )?;
+        Ok(())
+    }
+
+    /// Tüm kayıtları kuyruğa alır; takvim yeniden bağlandığında kullanılır.
+    pub fn mark_all_calendar_dirty(&self) -> Result<usize, AppError> {
+        let conn = self.conn()?;
+        Ok(conn.execute("UPDATE appointments SET calendar_synced = 0", [])?)
+    }
+
+    pub fn set_calendar_event(&self, id: &str, event_id: &str) -> Result<(), AppError> {
+        let conn = self.conn()?;
+        conn.execute(
+            "UPDATE appointments SET calendar_event_id = ?, calendar_synced = 1 WHERE id = ?",
+            params![event_id, id],
+        )?;
+        Ok(())
+    }
+
     // ---- yönetici şifresi -------------------------------------------------
 
     /// Saklanan şifre özeti; hiç değiştirilmemişse `None`.
@@ -1107,6 +1240,28 @@ fn is_range_free_conn(
         )
         .optional()?;
     Ok(blocked.is_none())
+}
+
+/// SQLite'ta `ADD COLUMN IF NOT EXISTS` yok; sütun listesi okunup karar verilir.
+fn add_column_if_missing(
+    conn: &Connection,
+    table: &str,
+    column: &str,
+    definition: &str,
+) -> Result<(), AppError> {
+    let mut statement = conn.prepare(&format!("PRAGMA table_info({table})"))?;
+    let existing: Vec<String> = statement
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    if existing.iter().any(|name| name == column) {
+        return Ok(());
+    }
+    drop(statement);
+    conn.execute(
+        &format!("ALTER TABLE {table} ADD COLUMN {column} {definition}"),
+        [],
+    )?;
+    Ok(())
 }
 
 fn set_availability_slot_conn(

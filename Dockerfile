@@ -1,6 +1,10 @@
 # Rust API + derlenmiş ön yüz tek imajda. Site ve API 4100 portundan sunulur.
 
 FROM rust:1-bookworm AS server-build
+# reqwest'in rustls sağlayıcısı (aws-lc-sys) derlenirken cmake gerekiyor.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends cmake \
+ && rm -rf /var/lib/apt/lists/*
 WORKDIR /build
 # Önce yalnızca manifest'ler kopyalanır; bağımlılık katmanı kaynak değişince yeniden derlenmez.
 COPY server/Cargo.toml server/Cargo.lock ./

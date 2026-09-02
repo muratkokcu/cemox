@@ -57,3 +57,14 @@ export type AuditEntry = {
   detail: string;
   ip: string;
 };
+
+export type CalendarStatus = {
+  /** Servis hesabı ortam değişkeninde tanımlı mı. */
+  configured: boolean;
+  serviceAccount: string | null;
+  calendarId: string;
+  enabled: boolean;
+  lastOkAt: number | null;
+  lastError: string;
+  lastErrorAt: number | null;
+};

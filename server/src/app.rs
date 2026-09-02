@@ -17,6 +17,7 @@ use tower::ServiceBuilder;
 use tower_http::services::ServeDir;
 use tower_http::set_header::SetResponseHeaderLayer;
 
+use crate::calendar::GoogleCalendar;
 use crate::config::{BOOKING_RULES, Config, SERVICES, app_root, service_name};
 use crate::db::{AdminSession, AppointmentQuery, Db, NewAppointment, SlotChange, WorkingHours};
 use crate::email::EmailService;
@@ -41,6 +42,8 @@ pub struct AppState {
     pub config: Arc<Config>,
     pub db: Db,
     pub email: EmailService,
+    /// Servis hesabı tanımlanmadıysa `None`; senkron kapalı kalır.
+    pub calendar: Option<Arc<GoogleCalendar>>,
     limiters: Arc<Limiters>,
 }
 
@@ -59,16 +62,143 @@ struct AdminContext {
 
 impl AppState {
     pub fn new(config: Config, db: Db, email: EmailService) -> Self {
+        Self::with_calendar(config, db, email, None)
+    }
+
+    pub fn with_calendar(
+        config: Config,
+        db: Db,
+        email: EmailService,
+        calendar: Option<Arc<GoogleCalendar>>,
+    ) -> Self {
         Self {
             config: Arc::new(config),
             db,
             email,
+            calendar,
             limiters: Arc::new(Limiters {
                 public: RateLimiter::new(15 * 60 * 1000, 120),
                 booking: RateLimiter::new(60 * 60 * 1000, 8),
                 login: RateLimiter::new(15 * 60 * 1000, 5),
             }),
         }
+    }
+
+    /// Takvim durumu değişmiş olabilecek bir randevuyu kuyruğa alır ve
+    /// uzlaştırmayı tetikler. Hata asıl işlemi etkilemez.
+    pub fn queue_calendar_sync(&self, appointment_id: &str) {
+        let db = self.db.clone();
+        let id = appointment_id.to_string();
+        if let Err(error) = db.mark_calendar_dirty(&id) {
+            tracing::error!(%error, "takvim kuyruğuna alınamadı");
+            return;
+        }
+        let state = self.clone();
+        tokio::spawn(async move {
+            // Görev panikleyecek olursa sessizce kaybolmasın: sağlık göstergesi
+            // "her şey yolunda" göstermeye devam ederse hata fark edilmez.
+            let worker = {
+                let state = state.clone();
+                tokio::spawn(async move { state.sync_calendar().await })
+            };
+            if let Err(error) = worker.await {
+                tracing::error!(%error, "takvim senkronu beklenmedik şekilde durdu");
+                let db = state.db.clone();
+                let recorded = blocking(move || {
+                    db.record_calendar_result(Some("Senkron beklenmedik şekilde durdu."), now_ms())
+                })
+                .await;
+                if let Err(error) = recorded {
+                    tracing::error!(%error, "takvim durumu kaydedilemedi");
+                }
+            }
+        });
+    }
+
+    /// Kuyruktaki randevuların takvim durumunu istenen hâle getirir.
+    ///
+    /// Tek tek "şunu oluştur / şunu sil" komutları yerine **uzlaştırma**
+    /// kullanılır: her kayıt için istenen durum baştan hesaplanır ve fark
+    /// kapatılır. Böylece geçici bir ağ hatası kalıcı tutarsızlığa dönüşmez —
+    /// bakım turu aynı kuyruğu yeniden işler.
+    pub async fn sync_calendar(&self) -> usize {
+        let Some(calendar) = self.calendar.clone() else {
+            return 0;
+        };
+        let db = self.db.clone();
+        let Ok(settings) = blocking(move || db.calendar_settings()).await else {
+            return 0;
+        };
+        if !settings.enabled || settings.calendar_id.is_empty() {
+            return 0;
+        }
+
+        let db = self.db.clone();
+        let Ok(pending) = blocking(move || db.appointments_needing_calendar_sync(50)).await else {
+            return 0;
+        };
+
+        let mut done = 0;
+        let mut failure: Option<String> = None;
+        for appointment in pending {
+            match self
+                .reconcile_one(&calendar, &settings.calendar_id, &appointment)
+                .await
+            {
+                Ok(()) => done += 1,
+                Err(error) => {
+                    tracing::error!(%error, id = appointment.id, "takvim senkronu başarısız");
+                    failure = Some(error.message);
+                    // İlk hatada durulur; kuyruk sıradaki turda yeniden denenir.
+                    break;
+                }
+            }
+        }
+
+        if done > 0 || failure.is_some() {
+            let db = self.db.clone();
+            let message = failure.clone();
+            let recorded =
+                blocking(move || db.record_calendar_result(message.as_deref(), now_ms())).await;
+            if let Err(error) = recorded {
+                tracing::error!(%error, "takvim durumu kaydedilemedi");
+            }
+        }
+        done
+    }
+
+    /// Tek bir randevunun takvimdeki karşılığını istenen duruma getirir.
+    /// Yalnızca onaylı randevular takvimde yer alır.
+    async fn reconcile_one(
+        &self,
+        calendar: &GoogleCalendar,
+        calendar_id: &str,
+        appointment: &crate::db::Appointment,
+    ) -> Result<(), AppError> {
+        let should_exist = appointment.status == "APPROVED";
+        let db = self.db.clone();
+        let id = appointment.id.clone();
+
+        if should_exist {
+            if appointment.calendar_event_id.is_empty() {
+                let event_id = calendar.create_event(calendar_id, appointment).await?;
+                blocking(move || db.set_calendar_event(&id, &event_id)).await?;
+            } else {
+                calendar
+                    .update_event(calendar_id, &appointment.calendar_event_id, appointment)
+                    .await?;
+                let event_id = appointment.calendar_event_id.clone();
+                blocking(move || db.set_calendar_event(&id, &event_id)).await?;
+            }
+        } else if appointment.calendar_event_id.is_empty() {
+            blocking(move || db.set_calendar_event(&id, "")).await?;
+        } else {
+            calendar
+                .delete_event(calendar_id, &appointment.calendar_event_id)
+                .await?;
+            blocking(move || db.set_calendar_event(&id, "")).await?;
+        }
+        Ok(())
     }
 
     /// `runMaintenance` karşılığı: süresi dolan talepleri kapatır ve bildirim gönderir.
@@ -79,6 +209,9 @@ impl AppState {
         if let Err(error) = blocking(move || pruner.prune_audit(cutoff)).await {
             tracing::error!(%error, "işlem kaydı budanamadı");
         }
+
+        // Kuyrukta kalan takvim işleri yeniden denenir.
+        self.sync_calendar().await;
 
         let db = self.db.clone();
         let expired = blocking(move || db.expire_pending(now)).await?;
@@ -151,6 +284,10 @@ pub fn build_router(state: AppState) -> Router {
         .route(
             "/api/admin/availability-slots",
             get(admin_list_slots).put(admin_set_slot),
+        )
+        .route(
+            "/api/admin/calendar",
+            get(admin_calendar_status).put(admin_set_calendar),
         )
         .route(
             "/api/admin/password",
@@ -800,6 +937,7 @@ async fn admin_update_appointment(
     let (appointment, moved) =
         blocking(move || db.update_appointment(&id, &input, now_ms())).await?;
 
+    state.queue_calendar_sync(&appointment.id);
     state
         .audit(
             if moved {
@@ -859,6 +997,7 @@ async fn admin_create_appointment(
     let appointment =
         blocking(move || db.create_manual_appointment(&input, MANUAL_ENTRY_NOTE, now)).await?;
 
+    state.queue_calendar_sync(&appointment.id);
     state
         .audit(
             "appointment.create",
@@ -913,6 +1052,7 @@ async fn admin_decide_appointment(
             .into_response());
     }
 
+    state.queue_calendar_sync(&appointment.id);
     state
         .audit(
             match action.as_str() {
@@ -947,6 +1087,80 @@ async fn admin_decide_appointment(
 /// `from`/`to` verilmezse varsayılan pencere bugünden itibaren 90 gündür.
 /// Admin takvimi başka bir aya gittiğinde o ayın aralığını göndererek
 /// kapalı zamanları da o aya göre alır.
+/// Takvim bağlantısının durumu. Servis hesabı ortam değişkeninden geldiği için
+/// panelden değiştirilmez; panel yalnızca hangi takvime yazılacağını ve
+/// senkronun açık olup olmadığını belirler.
+async fn admin_calendar_status(State(state): State<AppState>) -> Result<Json<Value>, AppError> {
+    let db = state.db.clone();
+    let settings = blocking(move || db.calendar_settings()).await?;
+    Ok(Json(json!({
+        "configured": state.calendar.is_some(),
+        "serviceAccount": state.calendar.as_ref().map(|calendar| calendar.client_email()),
+        "calendarId": settings.calendar_id,
+        "enabled": settings.enabled,
+        "lastOkAt": settings.last_ok_at,
+        "lastError": settings.last_error,
+        "lastErrorAt": settings.last_error_at
+    })))
+}
+
+async fn admin_set_calendar(
+    State(state): State<AppState>,
+    request: Request,
+) -> Result<Json<Value>, AppError> {
+    let ip = client_ip(&request, state.config.production);
+    let body = read_body(request).await?;
+    let payload = parse_json(&body)?;
+
+    let calendar_id = as_string(&payload, "calendarId").trim().to_string();
+    let enabled = payload.get("enabled") == Some(&Value::Bool(true));
+
+    if enabled {
+        if state.calendar.is_none() {
+            return Err(AppError::validation(
+                "Servis hesabı tanımlı değil; GOOGLE_SERVICE_ACCOUNT ayarlanmalıdır.",
+            ));
+        }
+        if calendar_id.is_empty() || calendar_id.chars().count() > 200 {
+            return Err(AppError::validation("Takvim kimliği girilmelidir."));
+        }
+    }
+
+    let db = state.db.clone();
+    let target = calendar_id.clone();
+    blocking(move || {
+        db.set_calendar_settings(&target, enabled)?;
+        // Bağlantı açıldığında ya da takvim değiştiğinde tüm kayıtlar yeniden
+        // uzlaştırılır; böylece kapalıyken kaçırılanlar da yerine oturur.
+        db.mark_all_calendar_dirty()?;
+        db.record_calendar_result(None, now_ms())
+    })
+    .await?;
+
+    state
+        .audit(
+            "calendar.settings",
+            &format!(
+                "{} · {calendar_id}",
+                if enabled { "açık" } else { "kapalı" }
+            ),
+            &ip,
+        )
+        .await;
+
+    let synced = state.sync_calendar().await;
+    let db = state.db.clone();
+    let settings = blocking(move || db.calendar_settings()).await?;
+    Ok(Json(json!({
+        "calendarId": settings.calendar_id,
+        "enabled": settings.enabled,
+        "synced": synced,
+        "lastOkAt": settings.last_ok_at,
+        "lastError": settings.last_error,
+        "lastErrorAt": settings.last_error_at
+    })))
+}
+
 async fn admin_change_password(
     State(state): State<AppState>,
     Extension(admin): Extension<AdminContext>,

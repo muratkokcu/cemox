@@ -5,6 +5,7 @@ use std::net::SocketAddr;
 use std::time::Duration;
 
 use cemox_server::app::{AppState, build_router};
+use cemox_server::calendar::GoogleCalendar;
 use cemox_server::config::{app_root, load_config};
 use cemox_server::db::Db;
 use cemox_server::email::EmailService;
@@ -28,8 +29,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         tracing::warn!("SMTP yapılandırılmadı; e-postalar yalnızca loglanacak.");
     }
 
+    // Servis hesabı tanımlı değilse takvim senkronu sessizce kapalı kalır.
+    let calendar = GoogleCalendar::from_env(&env).map(std::sync::Arc::new);
+    if calendar.is_none() {
+        tracing::info!("GOOGLE_SERVICE_ACCOUNT tanımlı değil; takvim senkronu kapalı.");
+    }
+
     let port = config.port;
-    let state = AppState::new(config, db, email);
+    let state = AppState::with_calendar(config, db, email, calendar);
     let router = build_router(state.clone());
 
     let address = SocketAddr::from(([0, 0, 0, 0], port));

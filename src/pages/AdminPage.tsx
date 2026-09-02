@@ -4,7 +4,7 @@ import { MonthCalendar } from '../components/MonthCalendar';
 import { TimeFormatToggle } from '../components/TimeFormatToggle';
 import { api, ApiError } from '../web/api';
 import { addDays, addMonths, DAY_MS, formatBlockRange, formatDateTime, formatDuration, formatMonth, formatRelative, formatSelectedDate, formatTime, localDateKey, minuteLabel, monthDays, monthKey, monthRange, timeOptions, toTimestamp, weekdayOf } from '../web/date';
-import type { AdminSlot, Appointment, AppointmentStatus, AuditEntry, AvailabilityBlock, Service, WorkingHours } from '../web/types';
+import type { AdminSlot, Appointment, AppointmentStatus, AuditEntry, AvailabilityBlock, CalendarStatus, Service, WorkingHours } from '../web/types';
 
 /** Takvim görünümünün verisi: gezilen ay ve seçili branşla sınırlı, sayfalanmamış. */
 type DashboardData = { slots: AdminSlot[]; monthAppointments: Appointment[]; blocks: AvailabilityBlock[] };
@@ -1122,7 +1122,13 @@ function SecurityModal({ csrf, onExpired, onClose, onChanged }: {
   onClose: () => void;
   onChanged: (message: string) => void;
 }) {
-  const [tab, setTab] = useState<'password' | 'audit'>('password');
+  // Modal adı "Güvenlik": her açılışta bir kerelik takvim kurulumuna düşmesin.
+  const [tab, setTab] = useState<'password' | 'audit' | 'calendar'>('password');
+  const [calendar, setCalendar] = useState<CalendarStatus | null>(null);
+  const [calendarId, setCalendarId] = useState('');
+  const [calendarOn, setCalendarOn] = useState(false);
+  const [calendarBusy, setCalendarBusy] = useState(false);
+  const [calendarError, setCalendarError] = useState('');
   const [current, setCurrent] = useState('');
   const [next, setNext] = useState('');
   const [repeat, setRepeat] = useState('');
@@ -1148,6 +1154,35 @@ function SecurityModal({ csrf, onExpired, onClose, onChanged }: {
   useEffect(() => {
     if (tab === 'audit' && !entries.length) void loadAudit(AUDIT_PAGE);
   }, [tab, entries.length, loadAudit]);
+
+  const loadCalendar = useCallback(async () => {
+    try {
+      const result = await api<CalendarStatus>('/api/admin/calendar');
+      setCalendar(result);
+      setCalendarId(result.calendarId);
+      setCalendarOn(result.enabled);
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 401) onExpired();
+    }
+  }, [onExpired]);
+
+  useEffect(() => { void loadCalendar(); }, [loadCalendar]);
+
+  async function saveCalendar() {
+    setCalendarBusy(true); setCalendarError('');
+    try {
+      const result = await api<{ synced: number }>('/api/admin/calendar', {
+        method: 'PUT', body: JSON.stringify({ calendarId: calendarId.trim(), enabled: calendarOn })
+      }, csrf);
+      await loadCalendar();
+      onChanged(calendarOn
+        ? `Takvim bağlandı. ${result.synced} randevu senkronlandı.`
+        : 'Takvim bağlantısı kapatıldı.');
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 401) onExpired();
+      else setCalendarError(err instanceof Error ? err.message : 'Kaydedilemedi.');
+    } finally { setCalendarBusy(false); }
+  }
 
   // Sunucudaki kuralın karşılığı; buton yanlış girdide kapalı kalır.
   const localError = !current || !next ? ''
@@ -1191,9 +1226,64 @@ function SecurityModal({ csrf, onExpired, onClose, onChanged }: {
         <div className="security-tabs" role="tablist">
           <button type="button" role="tab" aria-selected={tab === 'password'} className={tab === 'password' ? 'active' : ''} onClick={() => setTab('password')}>Şifre</button>
           <button type="button" role="tab" aria-selected={tab === 'audit'} className={tab === 'audit' ? 'active' : ''} onClick={() => setTab('audit')}>İşlem kaydı</button>
+          <button type="button" role="tab" aria-selected={tab === 'calendar'} className={tab === 'calendar' ? 'active' : ''} onClick={() => setTab('calendar')}>Takvim</button>
         </div>
 
-        {tab === 'password' ? (
+        {tab === 'calendar' ? (
+          <>
+            <p className="decision-description">
+              Onaylı randevular Google Takviminize yazılır; taşındığında güncellenir,
+              iptal edildiğinde silinir. Hatırlatıcılar takviminizin kendi ayarına bırakılır.
+            </p>
+
+            {!calendar?.configured ? (
+              <div className="block-warning">
+                <TriangleAlert size={16} />
+                <div>
+                  <strong>Servis hesabı tanımlı değil.</strong>
+                  <p>Sunucuda <code>GOOGLE_SERVICE_ACCOUNT</code> ayarlanmadan bağlantı kurulamaz.</p>
+                </div>
+              </div>
+            ) : (
+              <>
+                <ol className="calendar-steps">
+                  <li>Google Takvim ayarlarında takvimi paylaşın: <code>{calendar.serviceAccount}</code></li>
+                  <li>İzni <strong>“Etkinliklerde değişiklik yap”</strong> olarak seçin.</li>
+                  <li>Takvim kimliğinizi (genelde e-posta adresiniz) aşağıya yazın.</li>
+                </ol>
+                <div className="security-fields">
+                  <label>Takvim kimliği
+                    <input type="text" value={calendarId} placeholder="ornek@gmail.com" onChange={event => setCalendarId(event.target.value)} />
+                  </label>
+                  <label className="calendar-toggle">
+                    <input type="checkbox" checked={calendarOn} onChange={event => setCalendarOn(event.target.checked)} />
+                    <span>Senkronu aç</span>
+                  </label>
+                </div>
+
+                <div className={`calendar-health${calendar.lastError ? ' failed' : ''}`}>
+                  {calendar.lastError ? <TriangleAlert size={15} /> : <Check size={15} />}
+                  <div>
+                    <strong>
+                      {calendar.lastError
+                        ? 'Son senkron başarısız'
+                        : calendar.lastOkAt ? `Son senkron ${formatRelative(calendar.lastOkAt, now)}` : 'Henüz senkron yapılmadı'}
+                    </strong>
+                    {calendar.lastError && <p>{calendar.lastError}</p>}
+                  </div>
+                </div>
+              </>
+            )}
+
+            {calendarError && <div className="inline-error">{calendarError}</div>}
+            <footer className="decision-actions">
+              <button type="button" className="decision-secondary" disabled={calendarBusy} onClick={onClose}>Kapat</button>
+              <button type="button" className="decision-primary" disabled={calendarBusy || !calendar?.configured} onClick={saveCalendar}>
+                {calendarBusy ? <><LoaderCircle className="spin" size={16} /> Kaydediliyor…</> : 'Kaydet'}
+              </button>
+            </footer>
+          </>
+        ) : tab === 'password' ? (
           <form onSubmit={submit}>
             <p className="decision-description">
               Şifre değiştirildiğinde diğer cihazlardaki oturumlar kapanır; bu oturum açık kalır.

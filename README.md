@@ -16,6 +16,7 @@ Rust (axum + rusqlite) API, SQLite veritabanı.
 - Yönetim panelinden tatil/izin için tarih ve saat kapatma
 - Sunucu tarafında filtrelenen ve sayfalanan randevu listesi
 - SMTP üzerinden rezervasyon ve durum e-postaları
+- Panelden şifre değiştirme ve yönetici işlemlerinin kaydı
 - SQLite transaction, admin session, CSRF, origin kontrolü ve rate limiting
 
 ## Yerel kurulum
@@ -40,7 +41,9 @@ API geliştirme sırasında `http://localhost:4100` adresinde çalışır ve Vit
 
 `.env` içinde özellikle şu değerleri değiştirin:
 
-- `ADMIN_PASSWORD`: en az 12 karakterli güçlü yönetici şifresi
+- `ADMIN_PASSWORD`: en az 12 karakterli güçlü yönetici şifresi. Bu değer yalnızca
+  ilk kurulum içindir; panelden değiştirildiğinde şifre veritabanına taşınır ve
+  ortam değişkeni artık dikkate alınmaz
 - `SESSION_SECRET`: en az 32 karakterli rastgele değer
 - `APP_ORIGIN`: üretimde sitenin HTTPS adresi
 - `SMTP_*`: e-posta sağlayıcısının SMTP bilgileri
@@ -79,6 +82,16 @@ docker compose up -d --build
 üzerine kopyalanır. SQLite ikiliye gömülüdür, ek sistem paketi gerekmez.
 
 SQLite verisi `cemox-data` volume’unda saklanır. Üretimde uygulamanın önüne HTTPS sağlayan bir reverse proxy yerleştirin ve volume’u düzenli yedekleyin.
+
+## Güvenlik
+
+Şifre panelden değiştirilir; değişiklikte diğer cihazlardaki oturumlar kapanır,
+işlemi yapan oturum açık kalır. Şifre scrypt ile, kayıt başına rastgele tuzla
+saklanır.
+
+Panelde yapılan işlemler (giriş, başarısız giriş denemeleri, randevu kararları,
+kapalı zamanlar, toplu saat değişiklikleri, çalışma saatleri, şifre değişimi)
+işlem kaydına yazılır ve 180 gün sonra bakım sırasında silinir.
 
 ## Randevu kuralları
 

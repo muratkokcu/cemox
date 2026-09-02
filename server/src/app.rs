@@ -23,12 +23,16 @@ use crate::email::EmailService;
 use crate::error::AppError;
 use crate::export::{csv_export, ics_export};
 use crate::time::{
-    DAY_MS, civil_from_ms, format_day, format_time, iso_date, now_ms, parse_timestamp,
-    to_iso_string, utc_ms,
+    DAY_MS, civil_from_ms, format_date_time_long, format_day, format_time, iso_date, now_ms,
+    parse_timestamp, to_iso_string, utc_ms,
 };
 
 const SESSION_TTL_MS: i64 = 12 * 60 * 60 * 1000;
 const SESSION_COOKIE: &str = "cemox_admin";
+/// `loadConfig` ile aynı alt sınır.
+const MIN_PASSWORD_LENGTH: usize = 12;
+/// İşlem kaydı bu süreden eskiyse bakım sırasında silinir.
+const AUDIT_RETENTION_DAYS: i64 = 180;
 /// Elle oluşturulan kayıtlarda kaynağı belli etmek için yönetici notuna yazılır.
 const MANUAL_ENTRY_NOTE: &str = "Panelden elle oluşturuldu (telefon).";
 
@@ -69,6 +73,13 @@ impl AppState {
 
     /// `runMaintenance` karşılığı: süresi dolan talepleri kapatır ve bildirim gönderir.
     pub async fn run_maintenance(&self, now: i64) -> Result<usize, AppError> {
+        // İşlem kaydı sınırsız büyümesin.
+        let pruner = self.db.clone();
+        let cutoff = now - AUDIT_RETENTION_DAYS * DAY_MS;
+        if let Err(error) = blocking(move || pruner.prune_audit(cutoff)).await {
+            tracing::error!(%error, "işlem kaydı budanamadı");
+        }
+
         let db = self.db.clone();
         let expired = blocking(move || db.expire_pending(now)).await?;
         for appointment in &expired {
@@ -76,6 +87,27 @@ impl AppState {
         }
         Ok(expired.len())
     }
+}
+
+impl AppState {
+    /// İşlem kaydına satır yazar. Hatası yutulur: kayıt tutulamaması asıl
+    /// işlemi geçersiz kılmamalıdır.
+    pub async fn audit(&self, action: &'static str, detail: &str, ip: &str) {
+        let db = self.db.clone();
+        let detail = detail.to_string();
+        let ip = ip.to_string();
+        let written = blocking(move || db.record_audit(action, &detail, &ip, now_ms())).await;
+        if let Err(error) = written {
+            tracing::error!(%error, action, "işlem kaydı yazılamadı");
+        }
+    }
+}
+
+/// Gövdeyi okur; `Request` alan handler'lar `Bytes` çıkarıcısını kullanamaz.
+async fn read_body(request: Request) -> Result<Bytes, AppError> {
+    axum::body::to_bytes(request.into_body(), 256 * 1024)
+        .await
+        .map_err(|_| AppError::validation("İstek gövdesi okunamadı."))
 }
 
 /// SQLite çağrıları senkron olduğu için tokio çalışan iş parçacıklarını bloklamamak
@@ -120,6 +152,11 @@ pub fn build_router(state: AppState) -> Router {
             "/api/admin/availability-slots",
             get(admin_list_slots).put(admin_set_slot),
         )
+        .route(
+            "/api/admin/password",
+            axum::routing::put(admin_change_password),
+        )
+        .route("/api/admin/audit", get(admin_list_audit))
         .route(
             "/api/admin/working-hours",
             get(admin_list_working_hours).put(admin_set_working_hours),
@@ -470,17 +507,36 @@ async fn create_appointment(
 
 // ---- yönetici uçları ------------------------------------------------------
 
-async fn admin_login(State(state): State<AppState>, body: Bytes) -> Result<Response, AppError> {
+/// Şifre doğrulaması: panelden değiştirilmişse saklanan özet, değilse ortam
+/// değişkenindeki değer geçerlidir. scrypt CPU-yoğun olduğu için çalışan
+/// iş parçacığına taşınır.
+async fn verify_password(state: &AppState, password: String) -> Result<bool, AppError> {
+    let db = state.db.clone();
+    let expected = state.config.admin_password.clone();
+    let secret = state.config.session_secret.clone();
+    blocking(move || {
+        Ok(match db.stored_password()? {
+            Some(stored) => stored_password_matches(&password, &stored),
+            None => password_matches(&password, &expected, &secret),
+        })
+    })
+    .await
+}
+
+async fn admin_login(
+    State(state): State<AppState>,
+    request: Request,
+) -> Result<Response, AppError> {
+    let ip = client_ip(&request, state.config.production);
+    let body = read_body(request).await?;
     let payload = parse_json(&body)?;
     let password = as_string(&payload, "password");
 
-    let expected = state.config.admin_password.clone();
-    let secret = state.config.session_secret.clone();
-    // scrypt CPU-yoğun olduğu için çalışan iş parçacığına taşınır.
-    let matches = blocking(move || Ok(password_matches(&password, &expected, &secret))).await?;
-    if !matches {
+    if !verify_password(&state, password).await? {
+        state.audit("auth.login.failed", "", &ip).await;
         return Err(AppError::unauthorized("Şifre hatalı."));
     }
+    state.audit("auth.login", "", &ip).await;
 
     let db = state.db.clone();
     let session = blocking(move || db.create_session(SESSION_TTL_MS, now_ms())).await?;
@@ -510,9 +566,12 @@ async fn admin_session(Extension(admin): Extension<AdminContext>) -> Json<Value>
 async fn admin_logout(
     State(state): State<AppState>,
     Extension(admin): Extension<AdminContext>,
+    request: Request,
 ) -> Result<Response, AppError> {
+    let ip = client_ip(&request, state.config.production);
     let db = state.db.clone();
     blocking(move || db.delete_session(&admin.token)).await?;
+    state.audit("auth.logout", "", &ip).await;
 
     let mut response = Json(json!({ "ok": true })).into_response();
     response.headers_mut().insert(
@@ -724,8 +783,10 @@ fn validate_admin_appointment(payload: &Value) -> Result<NewAppointment, AppErro
 async fn admin_update_appointment(
     State(state): State<AppState>,
     Path(id): Path<String>,
-    body: Bytes,
+    request: Request,
 ) -> Result<Json<Value>, AppError> {
+    let ip = client_ip(&request, state.config.production);
+    let body = read_body(request).await?;
     let payload = parse_json(&body)?;
     let input = validate_admin_appointment(&payload)?;
 
@@ -738,6 +799,27 @@ async fn admin_update_appointment(
 
     let (appointment, moved) =
         blocking(move || db.update_appointment(&id, &input, now_ms())).await?;
+
+    state
+        .audit(
+            if moved {
+                "appointment.reschedule"
+            } else {
+                "appointment.update"
+            },
+            &format!(
+                "{} · {}{}",
+                appointment.name,
+                format_date_time_long(appointment.start_at),
+                if moved {
+                    format!(" (önceki: {})", format_date_time_long(previous.start_at))
+                } else {
+                    String::new()
+                }
+            ),
+            &ip,
+        )
+        .await;
 
     // Bildirim yalnızca kesinleşmiş bir randevu taşındığında gider; bekleyen
     // talep henüz karara bağlanmadığı için danışana "saatiniz değişti" denmez.
@@ -759,8 +841,10 @@ async fn admin_update_appointment(
 /// Kayıt doğrudan onaylı açılır; yönetici kararını telefonda vermiştir.
 async fn admin_create_appointment(
     State(state): State<AppState>,
-    body: Bytes,
+    request: Request,
 ) -> Result<Response, AppError> {
+    let ip = client_ip(&request, state.config.production);
+    let body = read_body(request).await?;
     let payload = parse_json(&body)?;
     let input = validate_admin_appointment(&payload)?;
 
@@ -774,6 +858,18 @@ async fn admin_create_appointment(
     let db = state.db.clone();
     let appointment =
         blocking(move || db.create_manual_appointment(&input, MANUAL_ENTRY_NOTE, now)).await?;
+
+    state
+        .audit(
+            "appointment.create",
+            &format!(
+                "{} · {}",
+                appointment.name,
+                format_date_time_long(appointment.start_at)
+            ),
+            &ip,
+        )
+        .await;
 
     let response = (
         StatusCode::CREATED,
@@ -792,8 +888,10 @@ async fn admin_create_appointment(
 async fn admin_decide_appointment(
     State(state): State<AppState>,
     Path(id): Path<String>,
-    body: Bytes,
+    request: Request,
 ) -> Result<Response, AppError> {
+    let ip = client_ip(&request, state.config.production);
+    let body = read_body(request).await?;
     let payload = parse_json(&body)?;
     let action = as_string(&payload, "action");
     let admin_note = normalize_text(&payload, "adminNote", 0, 500, "Yönetici notu")?;
@@ -815,6 +913,22 @@ async fn admin_decide_appointment(
             .into_response());
     }
 
+    state
+        .audit(
+            match action.as_str() {
+                "approve" => "appointment.approve",
+                "reject" => "appointment.reject",
+                _ => "appointment.cancel",
+            },
+            &format!(
+                "{} · {}",
+                appointment.name,
+                format_date_time_long(appointment.start_at)
+            ),
+            &ip,
+        )
+        .await;
+
     let response = Json(json!({ "appointment": appointment })).into_response();
 
     let email = state.email.clone();
@@ -833,6 +947,69 @@ async fn admin_decide_appointment(
 /// `from`/`to` verilmezse varsayılan pencere bugünden itibaren 90 gündür.
 /// Admin takvimi başka bir aya gittiğinde o ayın aralığını göndererek
 /// kapalı zamanları da o aya göre alır.
+async fn admin_change_password(
+    State(state): State<AppState>,
+    Extension(admin): Extension<AdminContext>,
+    request: Request,
+) -> Result<Json<Value>, AppError> {
+    let ip = client_ip(&request, state.config.production);
+    let body = read_body(request).await?;
+    let payload = parse_json(&body)?;
+
+    let current = as_string(&payload, "current");
+    let next = as_string(&payload, "next");
+
+    // Yeni şifre kuralı yapılandırmadakiyle aynı; zayıf şifreyle kilitlenmeyi önler.
+    if next.chars().count() < MIN_PASSWORD_LENGTH {
+        return Err(AppError::validation(format!(
+            "Yeni şifre en az {MIN_PASSWORD_LENGTH} karakter olmalıdır."
+        )));
+    }
+    if next == current {
+        return Err(AppError::validation(
+            "Yeni şifre mevcut şifreyle aynı olamaz.",
+        ));
+    }
+
+    if !verify_password(&state, current).await? {
+        state.audit("auth.password.failed", "", &ip).await;
+        return Err(AppError::unauthorized("Mevcut şifre hatalı."));
+    }
+
+    let db = state.db.clone();
+    let keep = admin.token.clone();
+    let closed = blocking(move || {
+        let salt = crate::db::random_token(16);
+        let hash = derive_hash(&next, &salt)
+            .ok_or_else(|| AppError::internal("şifre özeti üretilemedi"))?;
+        db.set_password(&salt, &encode_hash(&hash), now_ms())?;
+        // Diğer cihazlardaki oturumlar düşer; mevcut oturum korunur ki
+        // yönetici işlemin ortasında dışarı atılmasın.
+        db.delete_other_sessions(&keep)
+    })
+    .await?;
+
+    state
+        .audit(
+            "auth.password.changed",
+            &format!("{closed} oturum kapatıldı"),
+            &ip,
+        )
+        .await;
+    Ok(Json(json!({ "ok": true, "closedSessions": closed })))
+}
+
+async fn admin_list_audit(
+    State(state): State<AppState>,
+    Query(params): Query<HashMap<String, String>>,
+) -> Result<Json<Value>, AppError> {
+    let limit = parse_count(&params, "limit", 50, 1, 200, "Kayıt sayısı")?;
+    let offset = parse_count(&params, "offset", 0, 0, 100_000, "Başlangıç konumu")?;
+    let db = state.db.clone();
+    let (entries, total) = blocking(move || db.list_audit(limit, offset)).await?;
+    Ok(Json(json!({ "entries": entries, "total": total })))
+}
+
 async fn admin_list_working_hours(State(state): State<AppState>) -> Result<Json<Value>, AppError> {
     let db = state.db.clone();
     let hours = blocking(move || db.list_working_hours()).await?;
@@ -841,8 +1018,10 @@ async fn admin_list_working_hours(State(state): State<AppState>) -> Result<Json<
 
 async fn admin_set_working_hours(
     State(state): State<AppState>,
-    body: Bytes,
+    request: Request,
 ) -> Result<Json<Value>, AppError> {
+    let ip = client_ip(&request, state.config.production);
+    let body = read_body(request).await?;
     let payload = parse_json(&body)?;
     let entries = payload
         .get("hours")
@@ -890,12 +1069,16 @@ async fn admin_set_working_hours(
         });
     }
 
+    let closed = hours.iter().filter(|entry| entry.closed).count();
     let db = state.db.clone();
     let saved = blocking(move || {
         db.set_working_hours(&hours)?;
         db.list_working_hours()
     })
     .await?;
+    state
+        .audit("hours.update", &format!("{closed} gün kapalı"), &ip)
+        .await;
     Ok(Json(json!({ "hours": saved })))
 }
 
@@ -935,8 +1118,10 @@ fn optional_timestamp(
 
 async fn admin_create_block(
     State(state): State<AppState>,
-    body: Bytes,
+    request: Request,
 ) -> Result<Response, AppError> {
+    let ip = client_ip(&request, state.config.production);
+    let body = read_body(request).await?;
     let payload = parse_json(&body)?;
     let start_at = timestamp_field(&payload, "start", "Başlangıç")?;
     let end_at = timestamp_field(&payload, "end", "Bitiş")?;
@@ -954,18 +1139,37 @@ async fn admin_create_block(
 
     let db = state.db.clone();
     let block = blocking(move || db.create_block(start_at, end_at, &reason, now_ms())).await?;
+    state
+        .audit(
+            "block.create",
+            &format!(
+                "{} – {}{}",
+                format_date_time_long(block.start_at),
+                format_date_time_long(block.end_at),
+                if block.reason.is_empty() {
+                    String::new()
+                } else {
+                    format!(" · {}", block.reason)
+                }
+            ),
+            &ip,
+        )
+        .await;
     Ok((StatusCode::CREATED, Json(json!({ "block": block }))).into_response())
 }
 
 async fn admin_delete_block(
     State(state): State<AppState>,
     Path(id): Path<String>,
+    request: Request,
 ) -> Result<Response, AppError> {
+    let ip = client_ip(&request, state.config.production);
     let db = state.db.clone();
     let removed = blocking(move || db.delete_block(&id)).await?;
     if !removed {
         return Err(AppError::not_found("Kapalı zaman kaydı bulunamadı."));
     }
+    state.audit("block.delete", "", &ip).await;
     Ok(StatusCode::NO_CONTENT.into_response())
 }
 
@@ -993,8 +1197,10 @@ const MAX_BULK_SLOTS: usize = 1000;
 
 async fn admin_set_slots_bulk(
     State(state): State<AppState>,
-    body: Bytes,
+    request: Request,
 ) -> Result<Json<Value>, AppError> {
+    let ip = client_ip(&request, state.config.production);
+    let body = read_body(request).await?;
     let payload = parse_json(&body)?;
     let service_id = as_string(&payload, "serviceId");
     assert_service(&service_id)?;
@@ -1032,7 +1238,11 @@ async fn admin_set_slots_bulk(
     }
 
     let db = state.db.clone();
+    let label = service_id.clone();
     let applied = blocking(move || db.set_availability_slots(&service_id, &changes, now)).await?;
+    state
+        .audit("slots.bulk", &format!("{label} · {applied} saat"), &ip)
+        .await;
     Ok(Json(json!({ "applied": applied })))
 }
 
@@ -1402,6 +1612,30 @@ fn cleared_cookie(production: bool) -> String {
         cookie.push_str("; Secure");
     }
     cookie
+}
+
+/// scrypt ile özet üretir. Node `scryptSync` varsayılanları: N=16384 (log2 = 14),
+/// r=8, p=1, 64 bayt. Çıktı uzunluğu hedef tampondan belirlenir.
+fn derive_hash(password: &str, salt: &str) -> Option<[u8; 64]> {
+    let params = scrypt::Params::new(14, 8, 1).ok()?;
+    let mut hash = [0u8; 64];
+    scrypt::scrypt(password.as_bytes(), salt.as_bytes(), &params, &mut hash).ok()?;
+    Some(hash)
+}
+
+fn encode_hash(hash: &[u8; 64]) -> String {
+    hash.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+/// Panelden değiştirilmiş şifreyi rastgele tuzla doğrular.
+fn stored_password_matches(input: &str, stored: &crate::db::StoredPassword) -> bool {
+    let Some(hash) = derive_hash(input, &stored.salt) else {
+        return false;
+    };
+    encode_hash(&hash)
+        .as_bytes()
+        .ct_eq(stored.hash.as_bytes())
+        .into()
 }
 
 /// Girdi ve beklenen şifre aynı scrypt parametreleriyle türetilip sabit zamanda

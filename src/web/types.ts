@@ -50,3 +50,10 @@ export type WorkingHours = {
   end_minute: number;
   closed: boolean;
 };
+
+export type AuditEntry = {
+  at: number;
+  action: string;
+  detail: string;
+  ip: string;
+};

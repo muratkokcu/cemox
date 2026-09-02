@@ -1667,3 +1667,232 @@ async fn admin_can_export_appointments_as_csv_and_ical() {
         .await;
     assert_eq!(anonymous.status, 401, "dışa aktarma oturum ister");
 }
+
+#[tokio::test]
+async fn admin_can_change_the_password_and_read_the_audit_log() {
+    let server = common::start().await;
+    let (cookie, csrf) = server.login().await;
+    let headers = [("Cookie", cookie.as_str()), ("x-csrf-token", csrf.as_str())];
+    let read = [("Cookie", cookie.as_str())];
+
+    let change = async |current: &str, next: &str| -> common::ApiResponse {
+        server
+            .request(
+                Method::PUT,
+                "/api/admin/password",
+                &headers,
+                Some(json!({ "current": current, "next": next })),
+            )
+            .await
+    };
+
+    // Doğrulamalar.
+    let short = change("test-admin-password", "kisa").await;
+    assert_eq!(short.status, 400);
+    assert_eq!(
+        short.body["error"]["message"],
+        "Yeni şifre en az 12 karakter olmalıdır."
+    );
+
+    let same = change("test-admin-password", "test-admin-password").await;
+    assert_eq!(same.status, 400);
+    assert_eq!(
+        same.body["error"]["message"],
+        "Yeni şifre mevcut şifreyle aynı olamaz."
+    );
+
+    let wrong = change("yanlis-sifre-1234", "yeni-guclu-sifre-2026").await;
+    assert_eq!(wrong.status, 401);
+    assert_eq!(wrong.body["error"]["message"], "Mevcut şifre hatalı.");
+
+    // İkinci bir oturum aç; şifre değişince düşmeli.
+    let other = server
+        .post(
+            "/api/admin/login",
+            json!({ "password": "test-admin-password" }),
+        )
+        .await;
+    let other_cookie = other.set_cookie.clone().unwrap();
+    let still_valid = server
+        .request(
+            Method::GET,
+            "/api/admin/session",
+            &[("Cookie", other_cookie.as_str())],
+            None,
+        )
+        .await;
+    assert_eq!(still_valid.status, 200);
+
+    // Değiştir.
+    let changed = change("test-admin-password", "yeni-guclu-sifre-2026").await;
+    assert_eq!(changed.status, 200, "{:?}", changed.body);
+    assert_eq!(
+        changed.body["closedSessions"], 1,
+        "diğer oturum kapatılmalı"
+    );
+
+    // Mevcut oturum korunur, diğeri düşer.
+    let mine = server
+        .request(Method::GET, "/api/admin/session", &read, None)
+        .await;
+    assert_eq!(mine.status, 200, "işlemi yapan oturum korunmalı");
+    let theirs = server
+        .request(
+            Method::GET,
+            "/api/admin/session",
+            &[("Cookie", other_cookie.as_str())],
+            None,
+        )
+        .await;
+    assert_eq!(theirs.status, 401, "diğer cihazdaki oturum düşmeli");
+
+    // Eski şifre artık geçmez, yenisi geçer.
+    let old_login = server
+        .post(
+            "/api/admin/login",
+            json!({ "password": "test-admin-password" }),
+        )
+        .await;
+    assert_eq!(
+        old_login.status, 401,
+        "ortam değişkenindeki şifre artık geçersiz"
+    );
+    let new_login = server
+        .post(
+            "/api/admin/login",
+            json!({ "password": "yeni-guclu-sifre-2026" }),
+        )
+        .await;
+    assert_eq!(new_login.status, 200);
+
+    // İkinci kez değiştirmek de çalışmalı (saklanan özet üzerinden doğrulama).
+    let again = change("yeni-guclu-sifre-2026", "ucuncu-sifre-degeri-2026").await;
+    assert_eq!(again.status, 200, "{:?}", again.body);
+
+    // ---- işlem kaydı ----
+    let audit = server
+        .request(Method::GET, "/api/admin/audit", &read, None)
+        .await;
+    assert_eq!(audit.status, 200);
+    let entries = audit.body["entries"].as_array().unwrap();
+    let actions: Vec<&str> = entries
+        .iter()
+        .map(|entry| entry["action"].as_str().unwrap())
+        .collect();
+
+    for expected in [
+        "auth.login",
+        "auth.login.failed",
+        "auth.password.changed",
+        "auth.password.failed",
+    ] {
+        assert!(
+            actions.contains(&expected),
+            "{expected} kaydı bekleniyordu: {actions:?}"
+        );
+    }
+    assert_eq!(
+        actions
+            .iter()
+            .filter(|a| **a == "auth.password.changed")
+            .count(),
+        2,
+        "iki şifre değişikliği kaydedilmeli"
+    );
+    // En yeni kayıt başta olmalı.
+    let times: Vec<i64> = entries
+        .iter()
+        .map(|entry| entry["at"].as_i64().unwrap())
+        .collect();
+    assert!(
+        times.windows(2).all(|pair| pair[0] >= pair[1]),
+        "kayıtlar yeniden eskiye sıralı"
+    );
+
+    // Randevu ve kapalı zaman işlemleri de kaydedilir.
+    // Şifre bu noktada iki kez değiştiği için giriş güncel değerle yapılır.
+    let fresh = server
+        .post(
+            "/api/admin/login",
+            json!({ "password": "ucuncu-sifre-degeri-2026" }),
+        )
+        .await;
+    assert_eq!(fresh.status, 200, "{:?}", fresh.body);
+    let cookie = fresh.set_cookie.clone().unwrap();
+    let csrf = fresh.body["csrfToken"].as_str().unwrap().to_string();
+    let headers = [("Cookie", cookie.as_str()), ("x-csrf-token", csrf.as_str())];
+    let read = [("Cookie", cookie.as_str())];
+    let now = now_ms();
+    let local = civil_from_ms(now + BOOKING_RULES.offset_ms());
+    let start = utc_ms_hm(
+        local.year,
+        local.month as i64 - 1,
+        local.day as i64 + 3,
+        11,
+        0,
+    ) - BOOKING_RULES.offset_ms();
+    server
+        .request(
+            Method::POST,
+            "/api/admin/appointments",
+            &headers,
+            Some(json!({
+                "serviceId": "medical-fitness", "start": to_iso_string(start),
+                "name": "Kayıt Testi", "phone": "+905551110000"
+            })),
+        )
+        .await;
+    server
+        .request(
+            Method::POST,
+            "/api/admin/blocks",
+            &headers,
+            Some(json!({
+                "start": to_iso_string(start + 4 * 3_600_000),
+                "end": to_iso_string(start + 5 * 3_600_000),
+                "reason": "Kayıt testi"
+            })),
+        )
+        .await;
+
+    let after = server
+        .request(Method::GET, "/api/admin/audit?limit=200", &read, None)
+        .await;
+    let actions: Vec<&str> = after.body["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|entry| entry["action"].as_str().unwrap())
+        .collect();
+    assert!(actions.contains(&"appointment.create"));
+    assert!(actions.contains(&"block.create"));
+
+    let created = after.body["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["action"] == "appointment.create")
+        .unwrap();
+    assert!(
+        created["detail"].as_str().unwrap().contains("Kayıt Testi"),
+        "ayrıntı kimin randevusu olduğunu söylemeli: {created:?}"
+    );
+
+    // Sayfalama.
+    let paged = server
+        .request(
+            Method::GET,
+            "/api/admin/audit?limit=2&offset=0",
+            &read,
+            None,
+        )
+        .await;
+    assert_eq!(paged.body["entries"].as_array().unwrap().len(), 2);
+    assert!(paged.body["total"].as_i64().unwrap() > 2);
+
+    // Oturumsuz erişilemez.
+    let anonymous = server
+        .request(Method::GET, "/api/admin/audit", &[], None)
+        .await;
+    assert_eq!(anonymous.status, 401);
+}

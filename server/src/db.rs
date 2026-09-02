@@ -139,6 +139,19 @@ pub struct AppointmentPage {
     pub counts: BTreeMap<String, i64>,
 }
 
+pub struct StoredPassword {
+    pub salt: String,
+    pub hash: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AuditEntry {
+    pub at: i64,
+    pub action: String,
+    pub detail: String,
+    pub ip: String,
+}
+
 /// Günün çalışma penceresi. Dakikalar yerel gün başından sayılır.
 #[derive(Debug, Clone, Serialize)]
 pub struct WorkingHours {
@@ -289,6 +302,27 @@ impl Db {
               end_minute INTEGER NOT NULL,
               closed INTEGER NOT NULL DEFAULT 0
             );
+
+            -- Yönetici şifresi. Kayıt yoksa ortam değişkenindeki değer geçerlidir;
+            -- panelden değiştirildiğinde buraya yazılır ve ortam değişkeni yalnızca
+            -- ilk kurulum varsayılanı hâline gelir.
+            CREATE TABLE IF NOT EXISTS admin_password (
+              id INTEGER PRIMARY KEY CHECK(id = 1),
+              salt TEXT NOT NULL,
+              hash TEXT NOT NULL,
+              updated_at INTEGER NOT NULL
+            );
+
+            -- Yönetici işlemlerinin kaydı. Tek kullanıcı olduğu için "kim"
+            -- yerine "ne, ne zaman, nereden" tutulur.
+            CREATE TABLE IF NOT EXISTS audit_log (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              at INTEGER NOT NULL,
+              action TEXT NOT NULL,
+              detail TEXT NOT NULL DEFAULT '',
+              ip TEXT NOT NULL DEFAULT ''
+            );
+            CREATE INDEX IF NOT EXISTS idx_audit_at ON audit_log(at DESC);
 
             CREATE TABLE IF NOT EXISTS admin_sessions (
               token_hash TEXT PRIMARY KEY,
@@ -873,6 +907,87 @@ impl Db {
         set_availability_slot_conn(&conn, service_id, start_at, end_at, open, now)
     }
 
+    // ---- yönetici şifresi -------------------------------------------------
+
+    /// Saklanan şifre özeti; hiç değiştirilmemişse `None`.
+    pub fn stored_password(&self) -> Result<Option<StoredPassword>, AppError> {
+        let conn = self.conn()?;
+        conn.query_row(
+            "SELECT salt, hash FROM admin_password WHERE id = 1",
+            [],
+            |row| {
+                Ok(StoredPassword {
+                    salt: row.get(0)?,
+                    hash: row.get(1)?,
+                })
+            },
+        )
+        .optional()
+        .map_err(AppError::from)
+    }
+
+    pub fn set_password(&self, salt: &str, hash: &str, now: i64) -> Result<(), AppError> {
+        let conn = self.conn()?;
+        conn.execute(
+            "INSERT INTO admin_password (id, salt, hash, updated_at) VALUES (1, ?, ?, ?) \
+             ON CONFLICT(id) DO UPDATE SET salt = excluded.salt, hash = excluded.hash, \
+             updated_at = excluded.updated_at",
+            params![salt, hash, now],
+        )?;
+        Ok(())
+    }
+
+    /// Şifre değişince diğer cihazlardaki oturumlar düşer; mevcut oturum korunur.
+    pub fn delete_other_sessions(&self, keep_token: &str) -> Result<usize, AppError> {
+        let conn = self.conn()?;
+        Ok(conn.execute(
+            "DELETE FROM admin_sessions WHERE token_hash != ?",
+            params![hash_token(keep_token)],
+        )?)
+    }
+
+    // ---- işlem kaydı ------------------------------------------------------
+
+    /// Kaydı yazar. Asıl işlemi engellememesi için hatası çağıran tarafından
+    /// yutulur; kayıt tutulamaması işlemin kendisini geçersiz kılmaz.
+    pub fn record_audit(
+        &self,
+        action: &str,
+        detail: &str,
+        ip: &str,
+        now: i64,
+    ) -> Result<(), AppError> {
+        let conn = self.conn()?;
+        conn.execute(
+            "INSERT INTO audit_log (at, action, detail, ip) VALUES (?, ?, ?, ?)",
+            params![now, action, detail, ip],
+        )?;
+        Ok(())
+    }
+
+    pub fn list_audit(&self, limit: i64, offset: i64) -> Result<(Vec<AuditEntry>, i64), AppError> {
+        let conn = self.conn()?;
+        let total: i64 = conn.query_row("SELECT COUNT(*) FROM audit_log", [], |row| row.get(0))?;
+        let mut statement = conn.prepare(
+            "SELECT at, action, detail, ip FROM audit_log ORDER BY at DESC, id DESC LIMIT ? OFFSET ?",
+        )?;
+        let rows = statement.query_map(params![limit, offset], |row| {
+            Ok(AuditEntry {
+                at: row.get(0)?,
+                action: row.get(1)?,
+                detail: row.get(2)?,
+                ip: row.get(3)?,
+            })
+        })?;
+        Ok((rows.collect::<rusqlite::Result<Vec<_>>>()?, total))
+    }
+
+    /// Sınırsız büyümesin diye eski kayıtlar bakım sırasında silinir.
+    pub fn prune_audit(&self, before: i64) -> Result<usize, AppError> {
+        let conn = self.conn()?;
+        Ok(conn.execute("DELETE FROM audit_log WHERE at < ?", params![before])?)
+    }
+
     // ---- yönetici oturumları ----------------------------------------------
 
     pub fn create_session(&self, ttl_ms: i64, now: i64) -> Result<CreatedSession, AppError> {
@@ -1084,7 +1199,7 @@ fn like_pattern(term: &str) -> String {
     escaped
 }
 
-fn random_token(bytes: usize) -> String {
+pub fn random_token(bytes: usize) -> String {
     let mut buffer = vec![0u8; bytes];
     getrandom::fill(&mut buffer).expect("işletim sistemi rastgele sayı üreteci kullanılamıyor");
     URL_SAFE_NO_PAD.encode(buffer)

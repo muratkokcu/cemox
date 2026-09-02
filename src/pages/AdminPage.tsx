@@ -4,7 +4,7 @@ import { MonthCalendar } from '../components/MonthCalendar';
 import { TimeFormatToggle } from '../components/TimeFormatToggle';
 import { api, ApiError } from '../web/api';
 import { addDays, addMonths, DAY_MS, formatBlockRange, formatDateTime, formatDuration, formatMonth, formatRelative, formatSelectedDate, formatTime, localDateKey, minuteLabel, monthDays, monthKey, monthRange, timeOptions, toTimestamp, weekdayOf } from '../web/date';
-import type { AdminSlot, Appointment, AppointmentStatus, AvailabilityBlock, Service, WorkingHours } from '../web/types';
+import type { AdminSlot, Appointment, AppointmentStatus, AuditEntry, AvailabilityBlock, Service, WorkingHours } from '../web/types';
 
 /** Takvim görünümünün verisi: gezilen ay ve seçili branşla sınırlı, sayfalanmamış. */
 type DashboardData = { slots: AdminSlot[]; monthAppointments: Appointment[]; blocks: AvailabilityBlock[] };
@@ -222,6 +222,7 @@ function AdminDashboard({ csrf, onExpired }: { csrf: string; onExpired: () => vo
   const [copying, setCopying] = useState(false);
   const [workingHours, setWorkingHours] = useState<WorkingHours[]>([]);
   const [hoursOpen, setHoursOpen] = useState(false);
+  const [securityOpen, setSecurityOpen] = useState(false);
   const [hoursBusy, setHoursBusy] = useState(false);
   const [hoursError, setHoursError] = useState('');
   const [form, setForm] = useState<AppointmentForm | null>(null);
@@ -690,6 +691,7 @@ function AdminDashboard({ csrf, onExpired }: { csrf: string; onExpired: () => vo
         <a className="brand" href="/">CEM<span>.</span>AVAT <small>Yönetim</small></a>
         <div>
           <button type="button" onClick={() => setHoursOpen(true)}><Clock size={16} /> Çalışma saatleri</button>
+          <button type="button" onClick={() => setSecurityOpen(true)}><ShieldCheck size={16} /> Güvenlik</button>
           <button type="button" onClick={refreshAll}><RefreshCw size={16} /> Yenile</button>
           <button type="button" onClick={logout}><LogOut size={16} /> Çıkış</button>
         </div>
@@ -809,6 +811,9 @@ function AdminDashboard({ csrf, onExpired }: { csrf: string; onExpired: () => vo
           onClose={() => { if (!blockBusy) setBlockDraft(null); }}
           onConfirm={createBlock}
         />
+      )}
+      {securityOpen && (
+        <SecurityModal csrf={csrf} onExpired={onExpired} onClose={() => setSecurityOpen(false)} onChanged={notify} />
       )}
       {hoursOpen && (
         <WorkingHoursModal
@@ -1088,6 +1093,158 @@ function BlockSection({ blocks, month, loading, use24Hour, onAdd, onRemove }: {
         ))}
       </div>
     </section>
+  );
+}
+
+/** İşlem kaydındaki eylem adlarının okunur karşılıkları. */
+const AUDIT_LABELS: Record<string, string> = {
+  'auth.login': 'Giriş yapıldı',
+  'auth.login.failed': 'Hatalı şifreyle giriş denemesi',
+  'auth.logout': 'Çıkış yapıldı',
+  'auth.password.changed': 'Şifre değiştirildi',
+  'auth.password.failed': 'Hatalı mevcut şifreyle değiştirme denemesi',
+  'appointment.create': 'Randevu oluşturuldu',
+  'appointment.update': 'Randevu düzenlendi',
+  'appointment.reschedule': 'Randevu taşındı',
+  'appointment.approve': 'Randevu onaylandı',
+  'appointment.reject': 'Randevu reddedildi',
+  'appointment.cancel': 'Randevu iptal edildi',
+  'block.create': 'Kapalı zaman eklendi',
+  'block.delete': 'Kapalı zaman kaldırıldı',
+  'slots.bulk': 'Saatler toplu değiştirildi',
+  'hours.update': 'Çalışma saatleri güncellendi'
+};
+const AUDIT_PAGE = 30;
+
+function SecurityModal({ csrf, onExpired, onClose, onChanged }: {
+  csrf: string;
+  onExpired: () => void;
+  onClose: () => void;
+  onChanged: (message: string) => void;
+}) {
+  const [tab, setTab] = useState<'password' | 'audit'>('password');
+  const [current, setCurrent] = useState('');
+  const [next, setNext] = useState('');
+  const [repeat, setRepeat] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [entries, setEntries] = useState<AuditEntry[]>([]);
+  const [total, setTotal] = useState(0);
+  const [auditLoading, setAuditLoading] = useState(false);
+  const dialogRef = useModalShell(busy, onClose);
+  const now = useTicker(60_000);
+
+  const loadAudit = useCallback(async (count: number) => {
+    setAuditLoading(true);
+    try {
+      const result = await api<{ entries: AuditEntry[]; total: number }>(`/api/admin/audit?limit=${count}&offset=0`);
+      setEntries(result.entries);
+      setTotal(result.total);
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 401) onExpired();
+    } finally { setAuditLoading(false); }
+  }, [onExpired]);
+
+  useEffect(() => {
+    if (tab === 'audit' && !entries.length) void loadAudit(AUDIT_PAGE);
+  }, [tab, entries.length, loadAudit]);
+
+  // Sunucudaki kuralın karşılığı; buton yanlış girdide kapalı kalır.
+  const localError = !current || !next ? ''
+    : next.length < 12 ? 'Yeni şifre en az 12 karakter olmalıdır.'
+    : next === current ? 'Yeni şifre mevcut şifreyle aynı olamaz.'
+    : repeat && next !== repeat ? 'Yeni şifreler eşleşmiyor.' : '';
+  const ready = current.length > 0 && next.length >= 12 && next === repeat && next !== current;
+
+  async function submit(event: React.FormEvent) {
+    event.preventDefault();
+    setBusy(true); setError('');
+    try {
+      const result = await api<{ closedSessions: number }>('/api/admin/password', {
+        method: 'PUT', body: JSON.stringify({ current, next })
+      }, csrf);
+      setCurrent(''); setNext(''); setRepeat('');
+      onChanged(result.closedSessions > 0
+        ? `Şifre değiştirildi. ${result.closedSessions} oturum kapatıldı.`
+        : 'Şifre değiştirildi.');
+      onClose();
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 401 && err.code === 'UNAUTHORIZED') {
+        setError(err.message);
+      } else if (err instanceof ApiError && err.status === 401) {
+        onExpired();
+      } else {
+        setError(err instanceof Error ? err.message : 'Şifre değiştirilemedi.');
+      }
+    } finally { setBusy(false); }
+  }
+
+  return (
+    <div className="decision-backdrop" onMouseDown={event => { if (event.target === event.currentTarget && !busy) onClose(); }}>
+      <div className="decision-modal security-modal" role="dialog" aria-modal="true" aria-labelledby="security-title" tabIndex={-1} ref={dialogRef}>
+        <header className="decision-header">
+          <span className="decision-icon"><ShieldCheck /></span>
+          <div><span className="eyebrow">Yönetim</span><h2 id="security-title">Güvenlik</h2></div>
+          <button type="button" className="decision-close" aria-label="Pencereyi kapat" disabled={busy} onClick={onClose}><X size={18} /></button>
+        </header>
+
+        <div className="security-tabs" role="tablist">
+          <button type="button" role="tab" aria-selected={tab === 'password'} className={tab === 'password' ? 'active' : ''} onClick={() => setTab('password')}>Şifre</button>
+          <button type="button" role="tab" aria-selected={tab === 'audit'} className={tab === 'audit' ? 'active' : ''} onClick={() => setTab('audit')}>İşlem kaydı</button>
+        </div>
+
+        {tab === 'password' ? (
+          <form onSubmit={submit}>
+            <p className="decision-description">
+              Şifre değiştirildiğinde diğer cihazlardaki oturumlar kapanır; bu oturum açık kalır.
+            </p>
+            <div className="security-fields">
+              <label>Mevcut şifre
+                <input type="password" autoComplete="current-password" value={current} onChange={event => setCurrent(event.target.value)} />
+              </label>
+              <label>Yeni şifre <span>(en az 12 karakter)</span>
+                <input type="password" autoComplete="new-password" value={next} onChange={event => setNext(event.target.value)} />
+              </label>
+              <label>Yeni şifre (tekrar)
+                <input type="password" autoComplete="new-password" value={repeat} onChange={event => setRepeat(event.target.value)} />
+              </label>
+            </div>
+            {(localError || error) && <div className="inline-error">{localError || error}</div>}
+            <footer className="decision-actions">
+              <button type="button" className="decision-secondary" disabled={busy} onClick={onClose}>Vazgeç</button>
+              <button type="submit" className="decision-primary" disabled={busy || !ready}>
+                {busy ? <><LoaderCircle className="spin" size={16} /> Değiştiriliyor…</> : 'Şifreyi değiştir'}
+              </button>
+            </footer>
+          </form>
+        ) : (
+          <>
+            <p className="decision-description">
+              Panelde yapılan işlemler burada tutulur. Kayıtlar 180 gün sonra silinir.
+            </p>
+            <div className="audit-list">
+              {auditLoading && !entries.length && <div className="panel-state"><LoaderCircle className="spin" /> Yükleniyor…</div>}
+              {!auditLoading && !entries.length && <div className="panel-state">Henüz kayıt yok.</div>}
+              {entries.map((entry, index) => (
+                <div className={`audit-row${entry.action.endsWith('.failed') ? ' failed' : ''}`} key={`${entry.at}-${index}`}>
+                  <strong>{AUDIT_LABELS[entry.action] ?? entry.action}</strong>
+                  {entry.detail && <span>{entry.detail}</span>}
+                  <small title={formatDateTime(entry.at)}>{formatRelative(entry.at, now)}{entry.ip ? ` · ${entry.ip}` : ''}</small>
+                </div>
+              ))}
+            </div>
+            <footer className="decision-actions audit-actions">
+              <span>{entries.length} / {total} kayıt</span>
+              {entries.length < total && (
+                <button type="button" className="decision-secondary" disabled={auditLoading} onClick={() => loadAudit(entries.length + AUDIT_PAGE)}>
+                  {auditLoading ? <><LoaderCircle className="spin" size={15} /> Yükleniyor…</> : 'Daha fazla'}
+                </button>
+              )}
+            </footer>
+          </>
+        )}
+      </div>
+    </div>
   );
 }
 

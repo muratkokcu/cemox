@@ -7,6 +7,16 @@ services:
       - "4100:4100"
     volumes:
       - cemox-data:/app/data
+    # Google Takvim kullanılacaksa servis hesabı anahtarını .env içine gömmek
+    # yerine salt okunur bağlayın; .env genelde loglara ve `docker inspect`
+    # çıktısına düşer, bağlı dosya düşmez. Anahtarı proje dizinine koymayın.
+    #
+    #   volumes:
+    #     - cemox-data:/app/data
+    #     - /etc/cemox/google-key.json:/run/secrets/google-key.json:ro
+    #
+    # ve .env içinde:
+    #   GOOGLE_SERVICE_ACCOUNT=/run/secrets/google-key.json
 
 volumes:
   cemox-data:

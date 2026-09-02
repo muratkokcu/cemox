@@ -90,10 +90,27 @@ Onaylı randevular antrenörün Google Takvimine yazılır; taşındığında g�
 iptal edildiğinde silinir. Hatırlatıcılar takvimin kendi ayarına bırakılır, yani
 telefonun yerel bildirimleri çalışır.
 
-Kullanıcı OAuth'u yerine **servis hesabı** kullanılır. Bunun sebebi işlemsel:
-OAuth onay ekranı "Test" durumundayken yenileme jetonları yedi günde bir iptal
-ediliyor, süresiz olması için Google'ın doğrulama sürecinden geçmek gerekiyor.
-Servis hesabında bu yok — erişim jetonu kendi anahtarından üretiliyor.
+Kullanıcı OAuth'u yerine **servis hesabı** kullanılır. Sebep güvenlik değil,
+işletme maliyeti: OAuth tarafında onay ekranı kurmak, uygulamayı "Üretim"e almak
+(aksi halde yenileme jetonları yedi günde bir iptal olur), antrenöre
+"doğrulanmamış uygulama" uyarısını tıklattırmak, jetonu saklayıp yenilemek ve
+erişim geri çekilirse yeniden onay almak gerekir. Servis hesabında bunların
+hiçbiri yok.
+
+Güvenlik açısından ikisi birbirine yakın: her iki durumda da sunucuda uzun ömürlü
+bir sır duruyor — birinde özel anahtar, diğerinde yenileme jetonu. Anahtar
+riskini sınırlayan şey, servis hesabına **hiçbir Cloud IAM rolü verilmemesi**:
+yetkisinin tamamı, kendisiyle paylaşılan takvimden ibaret. Anahtar sızarsa
+kaybedilen o takvimin etkinlikleridir; konsoldan anahtarı silmek erişimi anında
+keser.
+
+Google'ın anahtar sayfasındaki "Workload Identity Federation kullanın" uyarısı
+bu kuruluma uymuyor: federasyon, iş yükünün jeton alabileceği bir kimlik
+sağlayıcısı ister (GKE, AWS, Azure, GitHub Actions ya da JWKS'ini yüklediğin
+kendi OIDC sağlayıcın). Düz bir Docker sunucusunda böyle bir kimlik yok; kendi
+sağlayıcını kurmak aynı makineye yine bir imzalama anahtarı koymak demek.
+Uygulama bir gün Cloud Run'a taşınırsa bağlı servis hesabı anahtarı gereksiz
+kılar — anahtarsız yol odur.
 
 Kurulum:
 

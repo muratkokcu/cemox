@@ -54,6 +54,15 @@ struct CachedToken {
     expires_at: i64,
 }
 
+/// Bir güncellemeden sonra etkinliğin takvimdeki durumu.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EventState {
+    /// Etkinlik yerinde; kimliği kullanılmaya devam edilebilir.
+    Live,
+    /// Etkinlik silinmiş ya da iptal edilmiş; yeniden oluşturulmalı.
+    Gone,
+}
+
 pub struct GoogleCalendar {
     http: reqwest::Client,
     account: ServiceAccount,
@@ -215,21 +224,39 @@ impl GoogleCalendar {
             .ok_or_else(|| AppError::internal("etkinlik kimliği alınamadı"))
     }
 
+    /// Etkinliği günceller ve sonrasında hâlâ takvimde durup durmadığını söyler.
+    ///
+    /// Antrenör etkinliği kendi takviminden silerse Google onu yok etmez,
+    /// `status: "cancelled"` olarak işaretler. Böyle bir etkinliğe gönderilen
+    /// PATCH **200 döner** ve alanları günceller, ama etkinlik takvimde
+    /// görünmez. Yanıtın durumuna bakılmazsa uygulama "güncelledim" sanır,
+    /// sağlık göstergesi yeşil kalır ve randevu bir daha takvime dönmez.
     pub async fn update_event(
         &self,
         calendar_id: &str,
         event_id: &str,
         appointment: &Appointment,
-    ) -> Result<(), AppError> {
+    ) -> Result<EventState, AppError> {
         let url = format!(
             "{}/calendars/{}/events/{}",
             self.api_base,
             encode_path(calendar_id),
             encode_path(event_id)
         );
-        self.send(reqwest::Method::PATCH, &url, Some(event_body(appointment)))
-            .await?;
-        Ok(())
+        match self
+            .send(reqwest::Method::PATCH, &url, Some(event_body(appointment)))
+            .await
+        {
+            Ok(value) => Ok(match value["status"].as_str() {
+                Some("cancelled") => EventState::Gone,
+                _ => EventState::Live,
+            }),
+            // Etkinlik tamamen yok edilmişse de yeniden oluşturmak gerekir.
+            Err(error) if error.message.contains("(404") || error.message.contains("(410") => {
+                Ok(EventState::Gone)
+            }
+            Err(error) => Err(error),
+        }
     }
 
     /// Etkinliği siler. Google 404/410 döndürürse etkinlik zaten yoktur;

@@ -17,7 +17,7 @@ use tower::ServiceBuilder;
 use tower_http::services::ServeDir;
 use tower_http::set_header::SetResponseHeaderLayer;
 
-use crate::calendar::GoogleCalendar;
+use crate::calendar::{EventState, GoogleCalendar};
 use crate::config::{BOOKING_RULES, Config, SERVICES, app_root, service_name};
 use crate::db::{AdminSession, AppointmentQuery, Db, NewAppointment, SlotChange, WorkingHours};
 use crate::email::EmailService;
@@ -178,16 +178,30 @@ impl AppState {
         let should_exist = appointment.status == "APPROVED";
         let db = self.db.clone();
         let id = appointment.id.clone();
+        tracing::info!(
+            appointment = %appointment.id,
+            status = %appointment.status,
+            event = %appointment.calendar_event_id,
+            should_exist,
+            "takvim uzlaştırma"
+        );
 
         if should_exist {
             if appointment.calendar_event_id.is_empty() {
                 let event_id = calendar.create_event(calendar_id, appointment).await?;
                 blocking(move || db.set_calendar_event(&id, &event_id)).await?;
             } else {
-                calendar
+                // Antrenör etkinliği takviminden silmiş olabilir. Google böyle bir
+                // etkinliğe yapılan güncellemeyi hatasız kabul ettiği için, silinmiş
+                // olduğunu ancak yanıta bakarak anlarız; anlamazsak randevu takvime
+                // bir daha hiç dönmez.
+                let state = calendar
                     .update_event(calendar_id, &appointment.calendar_event_id, appointment)
                     .await?;
-                let event_id = appointment.calendar_event_id.clone();
+                let event_id = match state {
+                    EventState::Live => appointment.calendar_event_id.clone(),
+                    EventState::Gone => calendar.create_event(calendar_id, appointment).await?,
+                };
                 blocking(move || db.set_calendar_event(&id, &event_id)).await?;
             }
         } else if appointment.calendar_event_id.is_empty() {

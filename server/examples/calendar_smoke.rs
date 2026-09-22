@@ -12,7 +12,7 @@
 
 use std::collections::HashMap;
 
-use cemox_server::calendar::GoogleCalendar;
+use cemox_server::calendar::{EventState, GoogleCalendar};
 use cemox_server::db::Appointment;
 
 #[tokio::main]
@@ -74,7 +74,12 @@ async fn main() {
         ..appointment
     };
     match calendar.update_event(&calendar_id, &event_id, &moved).await {
-        Ok(()) => println!("✓ Etkinlik güncellendi"),
+        Ok(EventState::Live) => println!("✓ Etkinlik güncellendi"),
+        Ok(EventState::Gone) => {
+            eprintln!("✗ Etkinlik güncellenirken kaybolmuş görünüyor.");
+            eprintln!("  Takvimden silinmiş olabilir; uygulama bu durumda yenisini oluşturur.");
+            std::process::exit(1);
+        }
         Err(error) => {
             eprintln!("✗ Güncellenemedi: {error}");
             eprintln!("  Paylaşım izni \"Etkinliklerde değişiklik yap\" değil, salt okunur olabilir.");

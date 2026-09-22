@@ -22,6 +22,9 @@ struct Recorded {
     /// Bu sayı sıfırdan büyükken sunucu 500 döndürür.
     fail_next: usize,
     next_event_id: usize,
+    /// Açıkken PATCH, Google'ın silinmiş etkinlik için verdiği yanıtı taklit
+    /// eder: hata değil, `status: "cancelled"` taşıyan 200.
+    patch_reports_cancelled: bool,
 }
 
 type Shared = Arc<Mutex<Recorded>>;
@@ -65,7 +68,10 @@ async fn fake_google(shared: Shared) -> String {
                 "patladı".into(),
             ));
         }
-        Ok(Json(json!({ "id": event_id })))
+        if state.patch_reports_cancelled && method == Method::PATCH {
+            return Ok(Json(json!({ "id": event_id, "status": "cancelled" })));
+        }
+        Ok(Json(json!({ "id": event_id, "status": "confirmed" })))
     }
 
     let app = Router::new()
@@ -364,4 +370,99 @@ async fn disabling_the_connection_stops_all_traffic() {
         shared.lock().unwrap().calls.is_empty(),
         "kapalıyken istek gitmemeli"
     );
+}
+
+
+/// Antrenör etkinliği kendi takviminden silerse Google onu yok etmez;
+/// `status: "cancelled"` olarak işaretler ve sonraki PATCH'e **200** döner.
+/// Yanıtın durumuna bakılmazsa uygulama güncellediğini sanır, sağlık
+/// göstergesi yeşil kalır ve randevu takvime bir daha hiç dönmez.
+#[tokio::test]
+async fn an_event_deleted_from_the_calendar_is_recreated() {
+    let shared: Shared = Arc::default();
+    let api_base = fake_google(shared.clone()).await;
+    let server = common::start_with_calendar(Some(calendar_for(&api_base))).await;
+    let (cookie, csrf) = server.login().await;
+    let headers = [("Cookie", cookie.as_str()), ("x-csrf-token", csrf.as_str())];
+
+    let now = now_ms();
+    let local = civil_from_ms(now + BOOKING_RULES.offset_ms());
+    let slot = |day: i64, hour: i64| -> i64 {
+        utc_ms_hm(
+            local.year,
+            local.month as i64 - 1,
+            local.day as i64 + day,
+            hour,
+            0,
+        ) - BOOKING_RULES.offset_ms()
+    };
+
+    server
+        .request(
+            Method::PUT,
+            "/api/admin/calendar",
+            &headers,
+            Some(json!({ "calendarId": "antrenor@example.com", "enabled": true })),
+        )
+        .await;
+
+    let created = server
+        .request(
+            Method::POST,
+            "/api/admin/appointments",
+            &headers,
+            Some(json!({
+                "serviceId": "medical-fitness", "start": to_iso_string(slot(3, 11)),
+                "name": "Deniz Ak", "phone": "+905551112233"
+            })),
+        )
+        .await;
+    assert_eq!(created.status, 201);
+    let appointment_id = created.body["appointment"]["id"].as_str().unwrap().to_string();
+
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    assert_eq!(
+        shared.lock().unwrap().calls.len(),
+        1,
+        "önce etkinlik oluşturulmalı"
+    );
+
+    // Antrenör etkinliği telefonundan siler.
+    shared.lock().unwrap().patch_reports_cancelled = true;
+
+    server
+        .request(
+            Method::PUT,
+            &format!("/api/admin/appointments/{appointment_id}"),
+            &headers,
+            Some(json!({
+                "serviceId": "medical-fitness", "start": to_iso_string(slot(4, 11)),
+                "name": "Deniz Ak", "phone": "+905551112233"
+            })),
+        )
+        .await;
+    tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+
+    let methods: Vec<String> = shared
+        .lock()
+        .unwrap()
+        .calls
+        .iter()
+        .map(|(method, _, _)| method.clone())
+        .collect();
+    assert_eq!(
+        methods,
+        vec!["POST", "PATCH", "POST"],
+        "silinmiş etkinlik fark edilip yenisi oluşturulmalı"
+    );
+
+    // Yeni kimlik saklanmalı; eskisi kullanılmaya devam ederse randevu kaybolur.
+    let read = [("Cookie", cookie.as_str())];
+    let listed = server
+        .request(Method::GET, "/api/admin/appointments", &read, None)
+        .await;
+    let event_id = listed.body["appointments"][0]["calendar_event_id"]
+        .as_str()
+        .unwrap();
+    assert_eq!(event_id, "evt-2", "yeni etkinliğin kimliği yazılmalı");
 }

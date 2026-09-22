@@ -589,3 +589,38 @@ a { color: inherit; text-decoration: none; }
   html { scroll-behavior: auto; }
   *, *:before, *:after { animation-duration: .01ms !important; transition-duration: .01ms !important; }
 }
+
+/* WhatsApp — görüşme kanalı sayfanın her yerinden bir tık uzakta.
+   Etiket geniş ekranda açık durur, dar ekranda daralıp simgeye iner:
+   telefonda içeriğin üstünü kaplayan bir hap, yardımdan çok engeldir. */
+.whatsapp-fab {
+  position: fixed;
+  right: max(20px, env(safe-area-inset-right));
+  bottom: max(20px, env(safe-area-inset-bottom));
+  z-index: 150;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 13px 20px 13px 16px;
+  border-radius: 999px;
+  color: #fff;
+  background: #177a41; /* beyaz etiketle 5.39:1 — marka yeşili #25D366 1.98:1 kalıyordu */
+  box-shadow: 0 10px 30px rgba(20, 78, 46, .28);
+  font-family: 'Outfit', sans-serif;
+  font-size: 15px;
+  font-weight: 600;
+  text-decoration: none;
+  transition: transform .25s, box-shadow .25s, background .25s;
+}
+.whatsapp-fab svg { width: 24px; height: 24px; fill: currentColor; flex: none; }
+.whatsapp-fab:hover { background: #16703c; box-shadow: 0 14px 38px rgba(20, 78, 46, .34); transform: translateY(-2px); }
+.whatsapp-fab:focus-visible { outline: 3px solid var(--gold); outline-offset: 3px; }
+
+/* Lightbox tam ekran ve modal; üstünde yüzen bir düğme hem kapatma tuşuyla
+   çakışır hem odak sırasını bozar. */
+body:has(.lightbox.active) .whatsapp-fab { display: none; }
+
+@media (max-width: 700px) {
+  .whatsapp-fab { padding: 14px; gap: 0; }
+  .whatsapp-fab span { display: none; }
+}

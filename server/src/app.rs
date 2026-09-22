@@ -608,7 +608,16 @@ async fn list_services() -> Json<Value> {
         .iter()
         .map(|(id, name)| json!({ "id": id, "name": name }))
         .collect();
-    Json(json!({ "services": services }))
+    // Seans uzunluğu ve ızgara adımı arayüzde üç ayrı yerde geçiyor. Sunucudan
+    // verilirse süre değiştiğinde arayüz kendiliğinden uyar; elle tekrar
+    // edilirse bir gün sunucu 90 derken ekran 20 der.
+    Json(json!({
+        "services": services,
+        "rules": {
+            "sessionMinutes": BOOKING_RULES.slot_minutes,
+            "stepMinutes": BOOKING_RULES.slot_step_minutes,
+        }
+    }))
 }
 
 async fn availability(
@@ -1275,9 +1284,11 @@ async fn admin_set_working_hours(
             .and_then(Value::as_i64)
             .unwrap_or(-1);
         let end_minute = entry.get("endMinute").and_then(Value::as_i64).unwrap_or(-1);
-        // Pencere, slot ızgarasıyla hizalı olmalı; aksi halde üretilen saatler
-        // yayınlanabilir saatlerle örtüşmezdi.
-        let step = BOOKING_RULES.slot_step_minutes;
+        // Pencere ızgarayla hizalı olmalı; aksi halde üretilen saatler
+        // yayınlanabilir saatlerle örtüşmezdi. Seans adımı değil ızgara
+        // çözünürlüğü kullanılır: seanslar pencerenin başından sayıldığı için
+        // pencerenin kendisinin seans uzunluğuna bölünmesi gerekmez.
+        let step = BOOKING_RULES.grid_minutes;
         if start_minute < 0
             || end_minute > 24 * 60
             || start_minute >= end_minute
@@ -1542,7 +1553,9 @@ pub fn build_availability(db: &Db, service_id: &str, now: i64) -> Result<Value, 
                     return None;
                 }
                 let minute_of_day = (start - day_start) / 60_000;
-                if !window.is_some_and(|entry| entry.covers(minute_of_day)) {
+                if !window.is_some_and(|entry| {
+                    entry.contains_session(minute_of_day, BOOKING_RULES.slot_minutes)
+                }) {
                     return None;
                 }
                 // Randevunun kendi tamponu kadar sonrası da korunur.
@@ -1662,7 +1675,7 @@ fn assert_slot(timestamp: i64, now: i64) -> Result<(), AppError> {
         ));
     }
     let local = civil_from_ms(timestamp + BOOKING_RULES.offset_ms());
-    if (local.minute as i64).rem_euclid(BOOKING_RULES.slot_step_minutes) != 0 {
+    if (local.minute as i64).rem_euclid(BOOKING_RULES.grid_minutes) != 0 {
         return Err(AppError::validation(
             "Seçilen saat geçerli bir zaman dilimi değil.",
         ));
@@ -1675,10 +1688,8 @@ fn assert_slot_grid(timestamp: i64) -> Result<(), AppError> {
         return Err(AppError::validation("Slot zamanı geçerli değil."));
     }
     let local = civil_from_ms(timestamp + BOOKING_RULES.offset_ms());
-    if (local.minute as i64).rem_euclid(BOOKING_RULES.slot_step_minutes) != 0 {
-        return Err(AppError::validation(
-            "Slot 30 dakikalık takvime uygun değil.",
-        ));
+    if (local.minute as i64).rem_euclid(BOOKING_RULES.grid_minutes) != 0 {
+        return Err(AppError::validation("Saat takvim ızgarasına uymuyor."));
     }
     Ok(())
 }

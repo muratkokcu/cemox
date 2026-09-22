@@ -120,24 +120,27 @@ impl EmailService {
         let when = format_date_time_long(appointment.start_at);
         let to_client = self.send(
             &appointment.email,
-            "Randevu seçiminiz alındı",
+            "Antrenman saati talebiniz alındı",
             format!(
-                "<p>Merhaba {name},</p><p><strong>{service}</strong> için <strong>{when}</strong> tarihini seçtiniz.</p>\
+                "<p>Merhaba {name},</p><p><strong>{service}</strong> için <strong>{when}</strong> saatini seçtiniz.</p>\
                  <p>Bu saat 24 saat boyunca sizin için tutulacak ve antrenör onayından sonra kesinleşecektir.</p>\
-                 <p>Randevu numarası: {id}</p>",
+                 <p>Talep numarası: {id}</p>",
                 name = escape_html(&appointment.name),
                 service = escape_html(&appointment.service_name),
                 id = escape_html(&appointment.id),
             ),
         );
-        let admin_subject = format!("Onay bekleyen randevu — {}", appointment.service_name);
+        let admin_subject = format!(
+            "Onay bekleyen antrenman saati — {}",
+            appointment.service_name
+        );
         let to_admin = self.send(
             &self.inner.admin_email,
             &admin_subject,
             format!(
                 "<p><strong>{name}</strong>, {when} saatini seçti.</p>\
                  <p>Telefon: {phone}<br>E-posta: {email}<br>Not: {note}</p>\
-                 <p><a href=\"{origin}/admin\">Randevuyu onaylayın veya reddedin</a></p>",
+                 <p><a href=\"{origin}/admin\">Saati onaylayın veya reddedin</a></p>",
                 name = escape_html(&appointment.name),
                 phone = escape_html(&appointment.phone),
                 email = escape_html(&appointment.email),
@@ -156,11 +159,11 @@ impl EmailService {
     pub async fn appointment_approved(&self, appointment: &Appointment) {
         self.send(
             &appointment.email,
-            "Telefon ön görüşmeniz onaylandı",
+            "Antrenman saatiniz onaylandı",
             format!(
-                "<p>Merhaba {name},</p><p><strong>{service}</strong> için telefon ön görüşmeniz <strong>{when}</strong> tarihine onaylandı.</p>\
-                 <p>Cem Avat randevu saatinde kayıt sırasında verdiğiniz telefon numarasından sizi arayacaktır.</p>\
-                 <p>İptal veya değişiklik için en geç 12 saat öncesinde <a href=\"tel:+905512327468\">telefon</a> ya da <a href=\"https://wa.me/905512327468\">WhatsApp</a> üzerinden iletişime geçin.</p>",
+                "<p>Merhaba {name},</p><p><strong>{service}</strong> antrenmanınız <strong>{when}</strong> saatine onaylandı.</p>\
+                 <p>Antrenman Fenerbahçe Dereağzı Tesisleri&#39;nde yapılacaktır; lütfen birkaç dakika önce hazır olun.</p>\
+                 <p>İptal veya değişiklik için en geç 12 saat öncesinde <a href=\"https://wa.me/905512327468\">WhatsApp</a> ya da <a href=\"tel:+905512327468\">telefon</a> üzerinden iletişime geçin.</p>",
                 name = escape_html(&appointment.name),
                 service = escape_html(&appointment.service_name),
                 when = format_date_time_long(appointment.start_at),
@@ -177,10 +180,10 @@ impl EmailService {
         };
         self.send(
             &appointment.email,
-            "Randevu talebiniz sonuçlandı",
+            "Antrenman saati talebiniz sonuçlandı",
             format!(
-                "<p>Merhaba {name},</p><p><strong>{service}</strong> için oluşturduğunuz randevu talebi uygunluk nedeniyle onaylanamadı.</p>{note}\
-                 <p>Web sitesinden farklı bir saat için yeniden talep oluşturabilirsiniz.</p>",
+                "<p>Merhaba {name},</p><p><strong>{service}</strong> için seçtiğiniz saat uygunluk nedeniyle onaylanamadı.</p>{note}\
+                 <p>Web sitesinden farklı bir saat seçebilir ya da WhatsApp üzerinden bize yazabilirsiniz.</p>",
                 name = escape_html(&appointment.name),
                 service = escape_html(&appointment.service_name),
             ),
@@ -191,12 +194,12 @@ impl EmailService {
     pub async fn appointment_rescheduled(&self, appointment: &Appointment, previous_start: i64) {
         self.send(
             &appointment.email,
-            "Randevunuz yeni bir saate alındı",
+            "Antrenmanınız yeni bir saate alındı",
             format!(
-                "<p>Merhaba {name},</p><p><strong>{service}</strong> için <strong>{previous}</strong> tarihindeki telefon ön görüşmeniz \
-                 <strong>{next}</strong> tarihine alındı.</p>\
-                 <p>Cem Avat yeni randevu saatinde kayıt sırasında verdiğiniz telefon numarasından sizi arayacaktır.</p>\
-                 <p>Uygun değilse <a href=\"tel:+905512327468\">telefon</a> ya da <a href=\"https://wa.me/905512327468\">WhatsApp</a> üzerinden bize ulaşın.</p>",
+                "<p>Merhaba {name},</p><p><strong>{service}</strong> antrenmanınız <strong>{previous}</strong> saatinden \
+                 <strong>{next}</strong> saatine alındı.</p>\
+                 <p>Antrenman yeri değişmedi: Fenerbahçe Dereağzı Tesisleri.</p>\
+                 <p>Uygun değilse <a href=\"https://wa.me/905512327468\">WhatsApp</a> ya da <a href=\"tel:+905512327468\">telefon</a> üzerinden bize ulaşın.</p>",
                 name = escape_html(&appointment.name),
                 service = escape_html(&appointment.service_name),
                 previous = format_date_time_long(previous_start),
@@ -209,10 +212,10 @@ impl EmailService {
     pub async fn appointment_cancelled(&self, appointment: &Appointment) {
         self.send(
             &appointment.email,
-            "Randevunuz iptal edildi",
+            "Antrenmanınız iptal edildi",
             format!(
-                "<p>Merhaba {name},</p><p><strong>{when}</strong> tarihli telefon ön görüşmeniz iptal edildi.</p>\
-                 <p>{note}</p><p>Yeni bir saat için web sitesinden tekrar talep oluşturabilirsiniz.</p>",
+                "<p>Merhaba {name},</p><p><strong>{when}</strong> saatindeki antrenmanınız iptal edildi.</p>\
+                 <p>{note}</p><p>Yeni bir saat için web sitesinden tekrar seçim yapabilirsiniz.</p>",
                 name = escape_html(&appointment.name),
                 when = format_date_time_long(appointment.start_at),
                 note = escape_html(&appointment.admin_note),
@@ -224,10 +227,10 @@ impl EmailService {
     pub async fn appointment_expired(&self, appointment: &Appointment) {
         self.send(
             &appointment.email,
-            "Randevu talebinizin süresi doldu",
+            "Antrenman saati talebinizin süresi doldu",
             format!(
-                "<p>Merhaba {name},</p><p><strong>{service}</strong> için oluşturduğunuz talep 24 saat içinde sonuçlandırılamadığı için süresi doldu ve seçilen saat yeniden müsait hale geldi.</p>\
-                 <p>Web sitesinden yeni bir talep oluşturabilirsiniz.</p>",
+                "<p>Merhaba {name},</p><p><strong>{service}</strong> için seçtiğiniz saat 24 saat içinde sonuçlandırılamadığı için talebiniz düştü ve saat yeniden müsait hale geldi.</p>\
+                 <p>Web sitesinden yeni bir saat seçebilirsiniz.</p>",
                 name = escape_html(&appointment.name),
                 service = escape_html(&appointment.service_name),
             ),

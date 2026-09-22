@@ -182,6 +182,13 @@ impl WorkingHours {
     pub fn covers(&self, minute_of_day: i64) -> bool {
         !self.closed && minute_of_day >= self.start_minute && minute_of_day < self.end_minute
     }
+
+    /// Seansın tamamı pencereye sığıyor mu? Yalnızca başlangıca bakmak, 90
+    /// dakikalık bir seansın kapanıştan sonra bitmesine izin verirdi: 18:00
+    /// kapanan bir günde 17:00 seansı 18:30'a taşardı.
+    pub fn contains_session(&self, minute_of_day: i64, session_minutes: i64) -> bool {
+        self.covers(minute_of_day) && minute_of_day + session_minutes <= self.end_minute
+    }
 }
 
 /// Toplu yazımda tek bir saatin hedef durumu.

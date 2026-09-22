@@ -23,9 +23,18 @@ pub fn service_name(id: &str) -> Option<&'static str> {
 pub struct BookingRules {
     pub timezone: &'static str,
     pub utc_offset_minutes: i64,
+    /// Bir antrenman seansının uzunluğu.
     pub slot_minutes: i64,
+    /// Seanslar arası zorunlu boşluk. Sıfır: seanslar uç uca verilebilir.
     pub buffer_minutes: i64,
+    /// Panelde seans ızgarasının adımı; çalışma penceresinin başından sayılır,
+    /// gece yarısından değil. Antrenör 08:00 açtığında seanslar 08:00, 09:30,
+    /// 11:00 diye gider.
     pub slot_step_minutes: i64,
+    /// Bir zaman damgasının kabul edilebilir en küçük çözünürlüğü. Seans adımı
+    /// pencereye göreli olduğu için hizalama bundan ayrı tutulur; aksi halde
+    /// 90'a bölünmeyen bir çalışma başlangıcı (08:00 gibi) seçilemezdi.
+    pub grid_minutes: i64,
     pub minimum_notice_hours: i64,
     pub horizon_days: i64,
     pub hold_hours: i64,
@@ -34,9 +43,10 @@ pub struct BookingRules {
 pub const BOOKING_RULES: BookingRules = BookingRules {
     timezone: "Europe/Istanbul",
     utc_offset_minutes: 180,
-    slot_minutes: 20,
-    buffer_minutes: 10,
-    slot_step_minutes: 30,
+    slot_minutes: 90,
+    buffer_minutes: 0,
+    slot_step_minutes: 90,
+    grid_minutes: 30,
     minimum_notice_hours: 24,
     horizon_days: 30,
     hold_hours: 24,

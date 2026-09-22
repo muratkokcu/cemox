@@ -25,7 +25,7 @@ export function MonthCalendar({
   const canGoForward = !maxMonth || month.slice(0, 7) < maxMonth.slice(0, 7);
 
   return (
-    <section className="calendar-panel" aria-label="Randevu takvimi">
+    <section className="calendar-panel" aria-label="Antrenman takvimi">
       <header className="calendar-heading">
         <h2>{formatMonth(month)}</h2>
         <div className="calendar-nav">

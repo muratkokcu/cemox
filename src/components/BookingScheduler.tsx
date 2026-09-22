@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowLeft, Check, Clock3, Globe2, LoaderCircle, Phone, ShieldCheck } from 'lucide-react';
+import { ArrowLeft, Check, Clock3, Dumbbell, Globe2, LoaderCircle, ShieldCheck } from 'lucide-react';
 import { api, ApiError } from '../web/api';
 import { addMonths, formatSelectedDate, formatTime, localDateKey, monthKey } from '../web/date';
-import type { Availability, Service, Slot } from '../web/types';
+import type { Availability, BookingRules, Service, Slot } from '../web/types';
 import { MonthCalendar } from './MonthCalendar';
 import { TimeFormatToggle } from './TimeFormatToggle';
 
@@ -22,15 +22,17 @@ export function BookingScheduler({ preferredServiceId = '' }: { preferredService
   const [step, setStep] = useState<'times' | 'details' | 'done'>('times');
   const [use24Hour, setUse24Hour] = useState(true);
   const [form, setForm] = useState<FormState>(emptyForm);
+  const [rules, setRules] = useState<BookingRules>({ sessionMinutes: 90, stepMinutes: 90 });
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
   const startedAt = useRef(Date.now());
 
   useEffect(() => {
-    api<{ services: Service[] }>('/api/services')
+    api<{ services: Service[]; rules?: BookingRules }>('/api/services')
       .then(result => {
         setServices(result.services);
+        if (result.rules) setRules(result.rules);
         setServiceId(result.services[0]?.id || '');
       })
       .catch(err => setError(err.message));
@@ -98,11 +100,11 @@ export function BookingScheduler({ preferredServiceId = '' }: { preferredService
           <img src="/galery/1E7A6619.webp" alt="Cem Avat" />
           <div><span>Antrenör</span><strong>Cem Avat</strong></div>
         </div>
-        <span className="eyebrow">Randevu oluştur</span>
-        <h1>{currentService?.name || 'Antrenman Görüşmesi'}</h1>
+        <span className="eyebrow">Antrenman saati seç</span>
+        <h1>{currentService?.name || 'Antrenman'}</h1>
         <div className="event-facts">
-          <p><Clock3 size={18} /><span>20 dakika</span></p>
-          <p><Phone size={18} /><span>Telefon görüşmesi</span></p>
+          <p><Clock3 size={18} /><span>{formatSessionLength(rules.sessionMinutes)}</span></p>
+          <p><Dumbbell size={18} /><span>Birebir antrenman</span></p>
           <p><Globe2 size={18} /><span>Europe / Istanbul</span></p>
         </div>
         <label className="service-field">
@@ -111,7 +113,7 @@ export function BookingScheduler({ preferredServiceId = '' }: { preferredService
             {services.map(service => <option value={service.id} key={service.id}>{service.name}</option>)}
           </select>
         </label>
-        <p className="approval-note"><ShieldCheck size={17} /> Seçiminiz antrenör onayından sonra kesinleşir.</p>
+        <p className="approval-note"><ShieldCheck size={17} /> Seçtiğiniz saat antrenör onayından sonra kesinleşir.</p>
       </aside>
 
       <MonthCalendar
@@ -152,7 +154,7 @@ export function BookingScheduler({ preferredServiceId = '' }: { preferredService
             <div className="time-list">
               {loading && <div className="panel-state"><LoaderCircle className="spin" /> Müsaitlik yükleniyor…</div>}
               {!loading && error && <div className="inline-error">{error}</div>}
-              {!loading && !error && !selectedDay && <div className="panel-state">Bu ay için müsait saat bulunmuyor.</div>}
+              {!loading && !error && !selectedDay && <div className="panel-state">Bu ay için açık antrenman saati bulunmuyor.</div>}
               {!loading && selectedDay?.slots.map(slot => {
                 const active = selectedSlot?.start === slot.start;
                 return (
@@ -193,9 +195,9 @@ function BookingForm({ form, selectedSlot, serviceName, submitting, error, onBac
       <label>E-posta<input required type="email" maxLength={160} autoComplete="email" value={form.email} onChange={e => field('email', e.target.value)} /></label>
       <label>Telefon<input required type="tel" autoComplete="tel" placeholder="+90 5xx xxx xx xx" value={form.phone} onChange={e => field('phone', e.target.value)} /></label>
       <label>Kısa not <span>(isteğe bağlı)</span><textarea maxLength={500} rows={3} value={form.note} onChange={e => field('note', e.target.value)} /></label>
-      <label className="consent"><input required type="checkbox" checked={form.consent} onChange={e => field('consent', e.target.checked)} /><span>Bilgilerimin randevu süreci için kullanılmasını kabul ediyorum.</span></label>
+      <label className="consent"><input required type="checkbox" checked={form.consent} onChange={e => field('consent', e.target.checked)} /><span>Bilgilerimin antrenman planlaması için kullanılmasını kabul ediyorum.</span></label>
       <input className="honey" tabIndex={-1} autoComplete="off" value={form.website} onChange={e => field('website', e.target.value)} />
-      <button className="submit-button" disabled={submitting}>{submitting ? 'Gönderiliyor…' : 'Randevu talebini gönder'}</button>
+      <button className="submit-button" disabled={submitting}>{submitting ? 'Gönderiliyor…' : 'Antrenman saatini talep et'}</button>
     </form>
   );
 }
@@ -205,7 +207,7 @@ function SuccessState({ onReset }: { onReset: () => void }) {
     <div className="success-state">
       <span><Check size={28} /></span>
       <h2>Talebiniz alındı</h2>
-      <p>Seçtiğiniz saat 24 saat boyunca sizin için tutulacak. Randevu, antrenör onayından sonra kesinleşecek.</p>
+      <p>Seçtiğiniz saat 24 saat boyunca sizin için tutulacak. Antrenmanınız, antrenör onayından sonra kesinleşecek.</p>
       <button type="button" onClick={onReset}>Başka bir saat seç</button>
     </div>
   );
@@ -215,4 +217,12 @@ function formatDateForSummary(value: string): string {
   return new Intl.DateTimeFormat('tr-TR', {
     weekday: 'long', day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Istanbul'
   }).format(new Date(value));
+}
+
+/** 90 → "1 saat 30 dakika"; süre sunucudan geldiği için burada sabit yazılmaz. */
+function formatSessionLength(minutes: number): string {
+  const hours = Math.floor(minutes / 60);
+  const rest = minutes % 60;
+  if (!hours) return `${rest} dakika`;
+  return rest ? `${hours} saat ${rest} dakika` : `${hours} saat`;
 }

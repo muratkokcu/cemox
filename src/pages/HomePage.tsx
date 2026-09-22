@@ -63,7 +63,7 @@ export function HomePage() {
           <li><a href="#gallery">Galeri</a></li>
           <li><a href="#contact">İletişim</a></li>
         </ul>
-        <button type="button" className="nav-cta" onClick={() => book()}>Randevu Al</button>
+        <button type="button" className="nav-cta" onClick={() => book()}>Antrenman Saati Seç</button>
       </nav>
 
       <main id="top">
@@ -103,12 +103,12 @@ export function HomePage() {
         <section id="services" className="services-section">
           <div className="section-tag">Hizmetler</div><div className="section-title">Uzmanlık Alanları</div>
           <div className="services-grid">
-            {services.map((service, index) => <article className="service-card" key={service.id}><div className="service-num">{String(index + 1).padStart(2, '0')}</div><h3>{service.name}</h3><p>{service.description}</p><button type="button" className="service-booking-btn" onClick={() => book(service.id)}>Randevu al →</button></article>)}
+            {services.map((service, index) => <article className="service-card" key={service.id}><div className="service-num">{String(index + 1).padStart(2, '0')}</div><h3>{service.name}</h3><p>{service.description}</p><button type="button" className="service-booking-btn" onClick={() => book(service.id)}>Saat seç →</button></article>)}
           </div>
         </section>
 
         <section className="booking-section" aria-labelledby="booking-section-title">
-          <div className="section-intro"><div><div className="section-tag">Online Randevu</div><h2 id="booking-section-title">Size uygun zamanı<br />doğrudan seçin.</h2></div><p>Yalnızca antrenörün branşa özel açtığı saatler görünür. Seçiminiz çakışmalara karşı tutulur ve onaya gönderilir.</p></div>
+          <div className="section-intro"><div><div className="section-tag">Antrenman Takvimi</div><h2 id="booking-section-title">Antrenman saatinizi<br />doğrudan seçin.</h2></div><p>Yalnızca antrenörün branşa özel açtığı saatler görünür. Seçtiğiniz saat çakışmalara karşı tutulur ve onaya gönderilir.</p></div>
           <BookingScheduler preferredServiceId={preferredService} />
         </section>
 
@@ -140,6 +140,8 @@ export function HomePage() {
 
       {lightboxIndex !== null && <div className="lightbox active" role="dialog" aria-modal="true" aria-label="Galeri görüntüsü" onMouseDown={event => { if (event.target === event.currentTarget) setLightboxIndex(null); }}><button className="lightbox-close" onClick={() => setLightboxIndex(null)} aria-label="Kapat">✕</button><button className="lightbox-prev" onClick={() => setLightboxIndex((lightboxIndex - 1 + gallery.length) % gallery.length)} aria-label="Önceki">‹</button><img src={gallery[lightboxIndex]} alt={`Antrenman karesi ${lightboxIndex + 1}`} /><button className="lightbox-next" onClick={() => setLightboxIndex((lightboxIndex + 1) % gallery.length)} aria-label="Sonraki">›</button><div className="lightbox-counter">{lightboxIndex + 1} / {gallery.length}</div></div>}
 
+      <WhatsAppButton />
+
       <footer><div>© 2026 Cem Avat — Medical Fitness & Performance</div><div><a href="/admin">Yönetim</a><a href="#top">Yukarı ↑</a></div></footer>
     </div>
   );
@@ -148,3 +150,31 @@ export function HomePage() {
 function Credential({ name, org, meta }: { name: string; org: string; meta: string }) { return <div className="cred-item"><div><div className="name">{name}</div><div className="org">{org}</div></div><div className="meta">{meta}</div></div>; }
 function Reference({ name, title, email }: { name: string; title: string; email: string }) { return <div className="ref-card"><div className="ref-name">{name}</div><div className="ref-title">{title}</div><div className="ref-email">{email}</div></div>; }
 function Contact({ href, icon, label, children }: { href: string; icon: string; label: string; children: React.ReactNode }) { return <a className="contact-card" href={href} target={href.startsWith('http') ? '_blank' : undefined} rel={href.startsWith('http') ? 'noopener' : undefined}><div className="icon">{icon}</div><div className="label">{label}</div><div className="value">{children}</div></a>; }
+
+/** Numara ve hazır metin tek yerde; e-postalardaki bağlantıyla aynı hat. */
+const WHATSAPP_NUMBER = '905512327468';
+const WHATSAPP_MESSAGE = 'Merhaba, antrenman hakkında bilgi almak istiyorum.';
+
+/**
+ * Görüşmeler WhatsApp üzerinden yürüdüğü için düğme sayfanın her yerinde
+ * erişilebilir kalır. Lightbox açıkken gizlenir: modal görüntünün üstünde
+ * duran yüzer bir düğme hem kapatma tuşunu gölgeler hem odak sırasını bozar.
+ */
+function WhatsAppButton() {
+  const href = `https://wa.me/${WHATSAPP_NUMBER}?text=${encodeURIComponent(WHATSAPP_MESSAGE)}`;
+  return (
+    <a
+      className="whatsapp-fab"
+      href={href}
+      target="_blank"
+      rel="noopener noreferrer"
+      aria-label="WhatsApp ile yazın"
+    >
+      <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <path d="M17.47 14.38c-.3-.15-1.76-.87-2.03-.97-.27-.1-.47-.15-.67.15-.2.3-.77.96-.94 1.16-.17.2-.35.22-.65.07-.3-.15-1.26-.46-2.4-1.48-.89-.79-1.49-1.77-1.66-2.07-.17-.3-.02-.46.13-.61.14-.13.3-.35.45-.52.15-.17.2-.3.3-.5.1-.2.05-.37-.02-.52-.08-.15-.67-1.61-.92-2.21-.24-.58-.49-.5-.67-.51h-.57c-.2 0-.52.07-.8.37-.27.3-1.04 1.02-1.04 2.48s1.07 2.88 1.22 3.08c.15.2 2.1 3.2 5.08 4.49.71.3 1.26.49 1.69.63.71.22 1.36.19 1.87.12.57-.09 1.76-.72 2.01-1.41.25-.7.25-1.29.17-1.42-.07-.13-.27-.2-.57-.35z" />
+        <path d="M12.04 2C6.58 2 2.13 6.45 2.13 11.91c0 1.75.46 3.46 1.32 4.96L2 22l5.25-1.38a9.87 9.87 0 0 0 4.79 1.22h.01c5.46 0 9.91-4.45 9.91-9.91C21.96 6.45 17.5 2 12.04 2zm0 18.15h-.01a8.23 8.23 0 0 1-4.19-1.15l-.3-.18-3.12.82.83-3.04-.2-.31a8.2 8.2 0 0 1-1.26-4.38c0-4.54 3.7-8.23 8.25-8.23 2.2 0 4.27.86 5.83 2.42a8.19 8.19 0 0 1 2.41 5.82c0 4.54-3.7 8.23-8.24 8.23z" />
+      </svg>
+      <span>WhatsApp</span>
+    </a>
+  );
+}

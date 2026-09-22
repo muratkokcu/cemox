@@ -1,4 +1,6 @@
 export type Service = { id: string; name: string };
+/** Sunucudan gelen rezervasyon kuralları; süre burada elle tekrar edilmez. */
+export type BookingRules = { sessionMinutes: number; stepMinutes: number };
 export type Slot = { start: string; label: string };
 export type AvailabilityDay = { date: string; label: string; slots: Slot[] };
 export type Availability = {

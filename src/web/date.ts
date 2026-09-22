@@ -75,6 +75,19 @@ export function formatTime(value: number | string, use24Hour = true): string {
 }
 
 /** Dakikayı "HH:MM" biçimine çevirir. */
+/**
+ * Bir zaman damgasının yerel saati, "HH:MM" olarak. Izgara anahtarı olarak
+ * kullanıldığı için 12/24 saat tercihinden bağımsızdır; `formatTime` sunum
+ * içindir, bu eşleşme içindir.
+ */
+export function localTimeKey(value: number): string {
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    timeZone: TIME_ZONE, hour: '2-digit', minute: '2-digit', hour12: false
+  }).formatToParts(new Date(value));
+  const get = (type: string) => parts.find(part => part.type === type)?.value ?? '00';
+  return `${get('hour')}:${get('minute')}`;
+}
+
 export function minuteLabel(minute: number): string {
   return `${String(Math.floor(minute / 60)).padStart(2, '0')}:${String(minute % 60).padStart(2, '0')}`;
 }
@@ -84,9 +97,21 @@ export function minuteLabel(minute: number): string {
  * Pencere verilmezse sunucudaki varsayılanla (08:00–22:00) aynı listeyi üretir;
  * ayarlar yüklenene kadar arayüzün boş kalmaması için.
  */
-export function timeOptions(startMinute = 8 * 60, endMinute = 22 * 60): string[] {
+/**
+ * Bir günün seans saatleri. Adım çalışma penceresinin başından sayılır, gece
+ * yarısından değil: antrenör 08:00 açtığında seanslar 08:00, 09:30, 11:00 gider.
+ * Son seansın penceresi taşmaması için bitişten bir seans boyu geriden durulur.
+ */
+export function timeOptions(
+  startMinute = 8 * 60,
+  endMinute = 22 * 60,
+  stepMinute = 30,
+  sessionMinute = stepMinute
+): string[] {
   const options: string[] = [];
-  for (let minute = startMinute; minute < endMinute; minute += 30) options.push(minuteLabel(minute));
+  for (let minute = startMinute; minute + sessionMinute <= endMinute; minute += stepMinute) {
+    options.push(minuteLabel(minute));
+  }
   return options;
 }
 

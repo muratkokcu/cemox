@@ -3,8 +3,8 @@ import { Ban, BellRing, CalendarClock, CalendarOff, Check, CheckCheck, ChevronDo
 import { MonthCalendar } from '../components/MonthCalendar';
 import { TimeFormatToggle } from '../components/TimeFormatToggle';
 import { api, ApiError } from '../web/api';
-import { addDays, addMonths, DAY_MS, formatBlockRange, formatDateTime, formatDuration, formatMonth, formatRelative, formatSelectedDate, formatTime, localDateKey, minuteLabel, monthDays, monthKey, monthRange, timeOptions, toTimestamp, weekdayOf } from '../web/date';
-import type { AdminSlot, Appointment, AppointmentStatus, AuditEntry, AvailabilityBlock, CalendarStatus, Service, WorkingHours } from '../web/types';
+import { addDays, addMonths, DAY_MS, formatBlockRange, formatDateTime, formatDuration, formatMonth, formatRelative, formatSelectedDate, formatTime, localDateKey, localTimeKey, minuteLabel, monthDays, monthKey, monthRange, timeOptions, toTimestamp, weekdayOf } from '../web/date';
+import type { AdminSlot, Appointment, AppointmentStatus, AuditEntry, AvailabilityBlock, BookingRules, CalendarStatus, Service, WorkingHours } from '../web/types';
 
 /** Takvim görünümünün verisi: gezilen ay ve seçili branşla sınırlı, sayfalanmamış. */
 type DashboardData = { slots: AdminSlot[]; monthAppointments: Appointment[]; blocks: AvailabilityBlock[] };
@@ -12,9 +12,8 @@ type DashboardData = { slots: AdminSlot[]; monthAppointments: Appointment[]; blo
 type StatusCounts = Partial<Record<AppointmentStatus, number>>;
 type AppointmentList = { items: Appointment[]; total: number; counts: StatusCounts };
 
-/** server/src/config.rs içindeki BOOKING_RULES ile aynı kalmalıdır. */
-const SLOT_MS = 20 * 60_000;
-const BUFFER_MS = 10 * 60_000;
+/** Kurallar gelene kadar kullanılan varsayılan; sunucu asıl kaynaktır. */
+const DEFAULT_RULES: BookingRules = { sessionMinutes: 90, stepMinutes: 90 };
 /** Yönetici tarafından değiştirilemeyen saat durumları. */
 const LOCKED_STATES: SlotState[] = ['pending', 'approved', 'blocked', 'past'];
 /** Pazartesi'den başlayan gösterim sırası; değerler Date.getUTCDay() karşılıkları. */
@@ -186,6 +185,8 @@ function AdminLogin({ message, onLogin }: { message: string; onLogin: (csrf: str
 
 function AdminDashboard({ csrf, onExpired }: { csrf: string; onExpired: () => void }) {
   const [services, setServices] = useState<Service[]>([]);
+  const [rules, setRules] = useState<BookingRules>(DEFAULT_RULES);
+  const slotMs = rules.sessionMinutes * 60_000;
   const [serviceId, setServiceId] = useState('');
   const [month, setMonth] = useState(monthKey(localDateKey()));
   const [selectedDate, setSelectedDate] = useState(localDateKey());
@@ -252,8 +253,12 @@ function AdminDashboard({ csrf, onExpired }: { csrf: string; onExpired: () => vo
   }, [guard]);
 
   useEffect(() => {
-    api<{ services: Service[] }>('/api/services')
-      .then(result => { setServices(result.services); setServiceId(current => current || result.services[0]?.id || ''); })
+    api<{ services: Service[]; rules?: BookingRules }>('/api/services')
+      .then(result => {
+        setServices(result.services);
+        if (result.rules) setRules(result.rules);
+        setServiceId(current => current || result.services[0]?.id || '');
+      })
       .catch(guard);
   }, [guard]);
 
@@ -389,17 +394,27 @@ function AdminDashboard({ csrf, onExpired }: { csrf: string; onExpired: () => vo
   /** Seçili günün çalışma penceresi; ayarlar yüklenmediyse varsayılan kullanılır. */
   const dayWindow = workingHours.find(entry => entry.weekday === weekdayOf(selectedDate));
   const dayClosed = dayWindow?.closed ?? false;
-  const dayTimes = useMemo(
-    () => (dayClosed ? [] : timeOptions(dayWindow?.start_minute, dayWindow?.end_minute)),
-    [dayClosed, dayWindow?.start_minute, dayWindow?.end_minute]
-  );
+  /**
+   * Günün satırları: seans ızgarası **artı** o güne daha önce yayınlanmış ama
+   * ızgaraya oturmayan saatler. İkincisi olmazsa, seans süresi ya da çalışma
+   * penceresi değiştiğinde eski ölçüyle açılmış saatler panelden kaybolur;
+   * danışana sunulmaya devam ettikleri için de kapatılamaz hale gelirler.
+   */
+  const dayTimes = useMemo(() => {
+    if (dayClosed) return [];
+    const grid = timeOptions(dayWindow?.start_minute, dayWindow?.end_minute, rules.stepMinutes, rules.sessionMinutes);
+    const published = data.slots
+      .filter(slot => localDateKey(slot.start_at) === selectedDate)
+      .map(slot => localTimeKey(slot.start_at));
+    return [...new Set([...grid, ...published])].sort();
+  }, [dayClosed, dayWindow?.start_minute, dayWindow?.end_minute, rules, data.slots, selectedDate]);
 
   /** Bir günün saat listesi; toplu işlemler ve kopyalama bunu kullanır. */
   const timesFor = useCallback((dateKey: string): string[] => {
     const entry = workingHours.find(item => item.weekday === weekdayOf(dateKey));
     if (entry?.closed) return [];
-    return timeOptions(entry?.start_minute, entry?.end_minute);
-  }, [workingHours]);
+    return timeOptions(entry?.start_minute, entry?.end_minute, rules.stepMinutes, rules.sessionMinutes);
+  }, [workingHours, rules]);
 
   async function saveWorkingHours(hours: WorkingHours[]) {
     setHoursBusy(true); setHoursError('');
@@ -428,8 +443,8 @@ function AdminDashboard({ csrf, onExpired }: { csrf: string; onExpired: () => vo
   function stateFor(start: number): { state: SlotState; appointment?: Appointment; block?: AvailabilityBlock } {
     const appointment = data.monthAppointments.find(item => item.start_at === start && ACTIVE_STATUSES.includes(item.status));
     if (appointment) return { state: appointment.status === 'APPROVED' ? 'approved' : 'pending', appointment };
-    const end = start + SLOT_MS;
-    const block = data.blocks.find(item => item.start_at < end + BUFFER_MS && item.end_at > start);
+    const end = start + slotMs;
+    const block = data.blocks.find(item => item.start_at < end && item.end_at > start);
     if (block) return { state: 'blocked', block };
     if (start < Date.now()) return { state: 'past' };
     return { state: openSet.has(start) ? 'open' : 'closed' };
@@ -452,7 +467,7 @@ function AdminDashboard({ csrf, onExpired }: { csrf: string; onExpired: () => vo
         if (change.open) {
           slots.set(change.startAt, {
             id: `optimistic-${change.startAt}`, service_id: serviceId,
-            start_at: change.startAt, end_at: change.startAt + SLOT_MS, created_at: Date.now()
+            start_at: change.startAt, end_at: change.startAt + slotMs, created_at: Date.now()
           });
         } else {
           slots.delete(change.startAt);

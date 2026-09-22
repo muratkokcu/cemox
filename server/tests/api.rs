@@ -601,7 +601,7 @@ async fn admin_can_write_many_slots_in_one_request() {
         ),
         (
             json!({ "serviceId": "medical-fitness", "slots": [{ "start": "2040-01-01T07:07:00.000Z", "open": true }] }),
-            "Slot 30 dakikalık takvime uygun değil.",
+            "Saat takvim ızgarasına uymuyor.",
         ),
         (
             json!({ "serviceId": "medical-fitness", "slots": [{ "start": "yarin", "open": true }] }),
@@ -1056,7 +1056,7 @@ async fn admin_can_create_an_appointment_by_hand() {
         (with("serviceId", json!("yok")), "Geçerli bir hizmet seçin."),
         (
             with("start", json!(to_iso_string(slot(3, 11, 7)))),
-            "Slot 30 dakikalık takvime uygun değil.",
+            "Saat takvim ızgarasına uymuyor.",
         ),
         (
             with("start", json!("2020-01-01T07:00:00.000Z")),
@@ -1305,7 +1305,7 @@ async fn admin_can_edit_and_reschedule_an_appointment() {
         ),
         (
             json!({ "serviceId": "medical-fitness", "start": to_iso_string(slot(5, 10, 7)), "name": "Ad", "phone": "+905550000000" }),
-            "Slot 30 dakikalık takvime uygun değil.",
+            "Saat takvim ızgarasına uymuyor.",
         ),
         (
             json!({ "serviceId": "medical-fitness", "start": to_iso_string(slot(5, 10, 0)), "name": "A", "phone": "+905550000000" }),
@@ -1897,4 +1897,156 @@ async fn admin_can_change_the_password_and_read_the_audit_log() {
         .request(Method::GET, "/api/admin/audit", &[], None)
         .await;
     assert_eq!(anonymous.status, 401);
+}
+
+/// Bir seans 90 dakika sürdüğü için, 10:00'da onaylanan antrenman 10:30 ve
+/// 11:00'i de kapatır. Süre 20 dakikayken bu saatler açık kalıyordu; kural
+/// değiştiğinde çakışma denetiminin de değiştiğini burada sabitliyoruz.
+#[tokio::test]
+async fn a_session_blocks_the_grid_slots_it_covers() {
+    let server = common::start().await;
+    let (cookie, csrf) = server.login().await;
+    let headers = [("Cookie", cookie.as_str()), ("x-csrf-token", csrf.as_str())];
+
+    let local_now = cemox_server::time::civil_from_ms(now_ms() + BOOKING_RULES.offset_ms());
+    let at = |hour: i64, minute: i64| -> i64 {
+        cemox_server::time::utc_ms_hm(
+            local_now.year,
+            local_now.month as i64 - 1,
+            local_now.day as i64 + 3,
+            hour,
+            minute,
+        ) - BOOKING_RULES.offset_ms()
+    };
+
+    // Izgaranın üç ardışık saatini aç: 10:00, 10:30, 11:00.
+    for (hour, minute) in [(10, 0), (10, 30), (11, 0)] {
+        let opened = server
+            .request(
+                Method::PUT,
+                "/api/admin/availability-slots",
+                &headers,
+                Some(json!({
+                    "serviceId": "medical-fitness",
+                    "start": to_iso_string(at(hour, minute)),
+                    "open": true
+                })),
+            )
+            .await;
+        assert_eq!(opened.status, 200, "{:?}", opened.body);
+    }
+
+    // Test ortamı başka günlere de saat açtığı için yalnızca hedef gün sayılır.
+    let day = to_iso_string(at(10, 0))[..10].to_string();
+    let on_day = |response: &common::ApiResponse| -> Vec<String> {
+        slot_starts(&response.body)
+            .into_iter()
+            .filter(|start| start.starts_with(&day))
+            .collect()
+    };
+
+    let offered = server
+        .get("/api/availability?service=medical-fitness")
+        .await;
+    assert_eq!(
+        on_day(&offered).len(),
+        3,
+        "üç saat de açık sunulmalı: {:?}",
+        on_day(&offered)
+    );
+
+    // 10:00 seansı onaylanır.
+    let booked = server
+        .request(
+            Method::POST,
+            "/api/admin/appointments",
+            &headers,
+            Some(json!({
+                "serviceId": "medical-fitness", "start": to_iso_string(at(10, 0)),
+                "name": "Seans Sahibi", "phone": "+905551112233"
+            })),
+        )
+        .await;
+    assert_eq!(booked.status, 201, "{:?}", booked.body);
+
+    // 10:00–11:30 dolu olduğu için üçü de kapanmalı.
+    let after = server
+        .get("/api/availability?service=medical-fitness")
+        .await;
+    assert!(
+        on_day(&after).is_empty(),
+        "90 dakikalık seans kapsadığı saatleri kapatmalı, açık kalan: {:?}",
+        on_day(&after)
+    );
+}
+
+/// Seansın tamamı çalışma penceresine sığmalı. Pencere 18:00'de kapanıyorsa
+/// 17:00 sunulmaz: 90 dakikalık seans 18:30'a taşardı.
+#[tokio::test]
+async fn a_session_that_overruns_closing_time_is_not_offered() {
+    let server = common::start().await;
+    let (cookie, csrf) = server.login().await;
+    let headers = [("Cookie", cookie.as_str()), ("x-csrf-token", csrf.as_str())];
+
+    // Her gün 08:00–18:00.
+    let hours: Vec<Value> = (0..7)
+        .map(|weekday| {
+            json!({ "weekday": weekday, "startMinute": 8 * 60, "endMinute": 18 * 60, "closed": false })
+        })
+        .collect();
+    let saved = server
+        .request(
+            Method::PUT,
+            "/api/admin/working-hours",
+            &headers,
+            Some(json!({ "hours": hours })),
+        )
+        .await;
+    assert_eq!(saved.status, 200, "{:?}", saved.body);
+
+    let local_now = cemox_server::time::civil_from_ms(now_ms() + BOOKING_RULES.offset_ms());
+    let at = |hour: i64| -> i64 {
+        cemox_server::time::utc_ms_hm(
+            local_now.year,
+            local_now.month as i64 - 1,
+            local_now.day as i64 + 3,
+            hour,
+            0,
+        ) - BOOKING_RULES.offset_ms()
+    };
+
+    // 16:00 tam sığar (17:30 biter), 17:00 taşar (18:30 biterdi).
+    for hour in [16, 17] {
+        let opened = server
+            .request(
+                Method::PUT,
+                "/api/admin/availability-slots",
+                &headers,
+                Some(json!({
+                    "serviceId": "medical-fitness",
+                    "start": to_iso_string(at(hour)),
+                    "open": true
+                })),
+            )
+            .await;
+        assert_eq!(opened.status, 200, "{:?}", opened.body);
+    }
+
+    let day = to_iso_string(at(16))[..10].to_string();
+    let offered = server
+        .get("/api/availability?service=medical-fitness")
+        .await;
+    let starts: Vec<String> = slot_starts(&offered.body)
+        .into_iter()
+        .filter(|start| start.starts_with(&day))
+        .collect();
+
+    assert!(
+        starts.iter().any(|start| start == &to_iso_string(at(16))),
+        "16:00 sunulmalı: {starts:?}"
+    );
+    assert!(
+        !starts.iter().any(|start| start == &to_iso_string(at(17))),
+        "17:00 kapanışı taştığı için sunulmamalı: {starts:?}"
+    );
 }

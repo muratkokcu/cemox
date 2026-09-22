@@ -1,0 +1,44 @@
+# Rust API + derlenmiş ön yüz tek imajda. Site ve API 4100 portundan sunulur.
+
+FROM rust:1-bookworm AS server-build
+# reqwest'in rustls sağlayıcısı (aws-lc-sys) derlenirken cmake gerekiyor.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends cmake \
+ && rm -rf /var/lib/apt/lists/*
+WORKDIR /build
+# Önce yalnızca manifest'ler kopyalanır; bağımlılık katmanı kaynak değişince yeniden derlenmez.
+COPY server/Cargo.toml server/Cargo.lock ./
+RUN mkdir src \
+ && echo 'fn main() {}' > src/main.rs \
+ && echo '' > src/lib.rs \
+ && cargo build --release \
+ && rm -rf src
+COPY server/src ./src
+RUN touch src/main.rs src/lib.rs && cargo build --release
+
+FROM node:24-bookworm-slim AS web-build
+WORKDIR /app
+COPY package.json package-lock.json ./
+RUN npm ci
+COPY . .
+RUN npm run build
+
+FROM debian:bookworm-slim
+ENV NODE_ENV=production \
+    APP_ROOT=/app
+WORKDIR /app
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends ca-certificates \
+ && rm -rf /var/lib/apt/lists/* \
+ && useradd --create-home --uid 1000 cemox
+
+# SQLite ikiliye gömülü (rusqlite `bundled`), TLS kökleri `webpki-roots` ile geliyor.
+COPY --from=server-build /build/target/release/cemox-server /usr/local/bin/cemox-server
+COPY --from=web-build /app/dist ./dist
+COPY assets ./assets
+COPY galery ./galery
+RUN mkdir -p /app/data && chown -R cemox:cemox /app
+
+USER cemox
+EXPOSE 4100
+CMD ["cemox-server"]

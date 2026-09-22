@@ -4,3 +4,20 @@ originals/
 # OS
 .DS_Store
 Thumbs.db
+
+# Full-custom randevu uygulaması
+node_modules/
+dist/
+*.tsbuildinfo
+.env
+data/
+npm-debug.log*
+
+# Rust backend
+server/target/
+
+# Google servis hesabı anahtarları — asla depoya girmesin
+*.iam.gserviceaccount.json
+cemox-takvim-*.json
+google-key*.json
+service-account*.json

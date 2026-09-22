@@ -1,1 +1,166 @@
-# cemox
+# Cem Avat — Full-Custom Randevu Sistemi
+
+Harici randevu servisi kullanmadan çalışan web uygulaması: React + TypeScript ön yüz,
+Rust (axum + rusqlite) API, SQLite veritabanı.
+
+## Özellikler
+
+- Altı hizmet için 20 dakikalık telefon ön görüşmesi
+- Cal.com benzeri ay takvimi ve seçili güne ait dikey saat listesi
+- Gün bazlı çalışma saatleri; panelden ayarlanır, kapalı günler işaretlenir
+- Admin takviminde branş bazında 30 dakikalık saatleri açık/kapalı yapma
+- Günün tamamını tek işlemde açma/kapatma, Shift ile aralık seçimi ve günü hafta günlerine kopyalama
+- React 19, Vite ve Tailwind CSS ile responsive kullanıcı ve yönetim ekranları
+- Seçilen saati 24 saat tutan yönetici onay akışı ve eşzamanlı çakışma koruması
+- Şifreli yönetim panelinden onay, ret ve iptal
+- Yönetim panelinden tatil/izin için tarih ve saat kapatma
+- Sunucu tarafında filtrelenen ve sayfalanan randevu listesi
+- SMTP üzerinden rezervasyon ve durum e-postaları
+- Onaylı randevuların antrenörün Google Takvimine yazılması
+- Panelden şifre değiştirme ve yönetici işlemlerinin kaydı
+- SQLite transaction, admin session, CSRF, origin kontrolü ve rate limiting
+
+## Yerel kurulum
+
+Ön yüz derlemesi için Node.js 24+, API için [Rust](https://rustup.rs) 1.90+ gereklidir.
+
+```bash
+npm install
+cp .env.example .env
+npm run dev
+```
+
+`npm run dev` API'yi ve Vite'ı birlikte çalıştırır. Rust kodunu değiştirdiğinizde API'yi
+yeniden başlatmak gerekir; otomatik yeniden başlatma için `cargo install cargo-watch`
+kurup `dev:api` betiğini `cargo watch -x run` ile değiştirebilirsiniz.
+
+Vite geliştirme arayüzü: `http://localhost:5100`
+
+Yönetim paneli: `http://localhost:5100/admin`
+
+API geliştirme sırasında `http://localhost:4100` adresinde çalışır ve Vite tarafından proxy’lenir. Üretim derlemesinde hem site hem API `4100` portundan sunulur.
+
+`.env` içinde özellikle şu değerleri değiştirin:
+
+- `ADMIN_PASSWORD`: en az 12 karakterli güçlü yönetici şifresi. Bu değer yalnızca
+  ilk kurulum içindir; panelden değiştirildiğinde şifre veritabanına taşınır ve
+  ortam değişkeni artık dikkate alınmaz
+- `SESSION_SECRET`: en az 32 karakterli rastgele değer
+- `APP_ORIGIN`: üretimde sitenin HTTPS adresi
+- `SMTP_*`: e-posta sağlayıcısının SMTP bilgileri
+
+SMTP tanımlanmadan development ortamında randevu işlemleri çalışır; e-posta gönderimleri maskelenmiş biçimde konsola yazılır.
+
+## Proje düzeni
+
+| Yol | İçerik |
+| --- | --- |
+| `src/` | React + TypeScript ön yüz |
+| `server/src/` | Rust API (axum + rusqlite) |
+| `server/tests/` | API bütünleşik testleri |
+| `scripts/check.mjs` | Ön yüz ile API sözleşmesinin bağlı kaldığını doğrular |
+
+API'yi kök dizinden çalıştırın: statik dosyalar (`assets/`, `galery/`, `dist/`) çalışma
+dizinine göre çözülür, gerekirse `APP_ROOT` ile geçersiz kılınabilir.
+
+## Test ve kontroller
+
+```bash
+npm run check   # tsc + cargo fmt --check + clippy + entegrasyon kontrolleri
+npm test        # API testleri
+npm run build   # ön yüz + release API ikilisi
+npm audit
+```
+
+## Docker ile çalıştırma
+
+```bash
+cp .env.example .env
+docker compose up -d --build
+```
+
+İmaj çok aşamalıdır: Rust API'si ve ön yüz derlenir, sonuç `debian:bookworm-slim`
+üzerine kopyalanır. SQLite ikiliye gömülüdür, ek sistem paketi gerekmez.
+
+SQLite verisi `cemox-data` volume’unda saklanır. Üretimde uygulamanın önüne HTTPS sağlayan bir reverse proxy yerleştirin ve volume’u düzenli yedekleyin.
+
+## Google Takvim
+
+Onaylı randevular antrenörün Google Takvimine yazılır; taşındığında güncellenir,
+iptal edildiğinde silinir. Hatırlatıcılar takvimin kendi ayarına bırakılır, yani
+telefonun yerel bildirimleri çalışır.
+
+Kullanıcı OAuth'u yerine **servis hesabı** kullanılır. Sebep güvenlik değil,
+işletme maliyeti: OAuth tarafında onay ekranı kurmak, uygulamayı "Üretim"e almak
+(aksi halde yenileme jetonları yedi günde bir iptal olur), antrenöre
+"doğrulanmamış uygulama" uyarısını tıklattırmak, jetonu saklayıp yenilemek ve
+erişim geri çekilirse yeniden onay almak gerekir. Servis hesabında bunların
+hiçbiri yok.
+
+Güvenlik açısından ikisi birbirine yakın: her iki durumda da sunucuda uzun ömürlü
+bir sır duruyor — birinde özel anahtar, diğerinde yenileme jetonu. Anahtar
+riskini sınırlayan şey, servis hesabına **hiçbir Cloud IAM rolü verilmemesi**:
+yetkisinin tamamı, kendisiyle paylaşılan takvimden ibaret. Anahtar sızarsa
+kaybedilen o takvimin etkinlikleridir; konsoldan anahtarı silmek erişimi anında
+keser.
+
+Google'ın anahtar sayfasındaki "Workload Identity Federation kullanın" uyarısı
+bu kuruluma uymuyor: federasyon, iş yükünün jeton alabileceği bir kimlik
+sağlayıcısı ister (GKE, AWS, Azure, GitHub Actions ya da JWKS'ini yüklediğin
+kendi OIDC sağlayıcın). Düz bir Docker sunucusunda böyle bir kimlik yok; kendi
+sağlayıcını kurmak aynı makineye yine bir imzalama anahtarı koymak demek.
+Uygulama bir gün Cloud Run'a taşınırsa bağlı servis hesabı anahtarı gereksiz
+kılar — anahtarsız yol odur.
+
+Kurulum:
+
+1. Google Cloud'da bir proje açıp Calendar API'yi etkinleştirin.
+2. Servis hesabı oluşturup JSON anahtarını indirin, `GOOGLE_SERVICE_ACCOUNT`
+   olarak tanımlayın (dosya yolu veya JSON'un kendisi).
+3. Antrenör kendi Google Takvimini servis hesabının e-postasıyla paylaşsın,
+   izin **“Etkinliklerde değişiklik yap”** olsun.
+4. Panelde **Güvenlik → Takvim** sekmesinden takvim kimliğini girip senkronu açın.
+
+Senkron **uzlaştırma** ile çalışır: her randevu için istenen durum baştan
+hesaplanır ve fark kapatılır. Geçici bir hata kalıcı tutarsızlığa dönüşmez;
+bakım turu kuyruğu yeniden işler. Panelde son başarılı senkron ve varsa son hata
+görünür — sessiz bozulmayı fark etmek için.
+
+`GOOGLE_SERVICE_ACCOUNT` tanımlı değilse senkron tamamen kapalıdır.
+
+Kurulumu gerçek Google'a karşı sınamak için — bir deneme etkinliği oluşturup
+taşıyıp siler, takvimde iz bırakmaz:
+
+```
+GOOGLE_SERVICE_ACCOUNT=anahtar.json \
+  cargo run --manifest-path server/Cargo.toml \
+  --example calendar_smoke -- takvim@gmail.com
+```
+
+Hata verirse nedenini söyler: takvim paylaşılmamışsa Google 404 döndürür — servis
+hesapları paylaşılmayan takvimi "yok" olarak görür, "izin yok" demez.
+
+TLS yapılandırmasını yeni bir ortamda doğrulamak için:
+`cargo run --manifest-path server/Cargo.toml --example tls_smoke`
+
+## Güvenlik
+
+Şifre panelden değiştirilir; değişiklikte diğer cihazlardaki oturumlar kapanır,
+işlemi yapan oturum açık kalır. Şifre scrypt ile, kayıt başına rastgele tuzla
+saklanır.
+
+Panelde yapılan işlemler (giriş, başarısız giriş denemeleri, randevu kararları,
+kapalı zamanlar, toplu saat değişiklikleri, çalışma saatleri, şifre değişimi)
+işlem kaydına yazılır ve 180 gün sonra bakım sırasında silinir.
+
+## Randevu kuralları
+
+Çalışma saatleri panelden, gün bazlı olarak ayarlanır (varsayılan: her gün 08:00–22:00).
+Bu pencere dış zarftır: dışında kalan saatler, daha önce açılmış olsalar bile danışanlara
+sunulmaz. Slot kayıtları silinmediği için pencere yeniden genişletildiğinde geri gelirler.
+
+Randevu süresi, tampon süre, minimum bildirim ve rezervasyon ufku hâlâ kodda,
+[server/src/config.rs](server/src/config.rs) içindeki `BOOKING_RULES` üzerindedir —
+bunları değiştirmek mevcut kayıtları etkileyebileceği için panele açılmadı.
+Hizmet adları aynı dosyadaki `SERVICES` listesindedir; branşların açık saatleri admin
+takviminden belirlenir.

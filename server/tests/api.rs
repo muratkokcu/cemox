@@ -2136,3 +2136,61 @@ async fn exported_cells_cannot_start_a_spreadsheet_formula() {
         "tehlikeli hücreler metin olarak işaretlenmeli:\n{csv}"
     );
 }
+
+/// Eksik başlık zaten reddediliyordu; asıl karşılaştırmayı sınayan durum
+/// **yanlış** bir jetonun gönderilmesidir. Karşılaştırma sabit zamanlı olduğu
+/// için doğru önekli bir tahmin de tamamen farklı biri de aynı yanıtı alır.
+#[tokio::test]
+async fn a_wrong_csrf_token_is_refused_whatever_its_prefix() {
+    let server = common::start().await;
+    let (cookie, csrf) = server.login().await;
+
+    let local_now = cemox_server::time::civil_from_ms(now_ms() + BOOKING_RULES.offset_ms());
+    let start_at = cemox_server::time::utc_ms_hm(
+        local_now.year,
+        local_now.month as i64 - 1,
+        local_now.day as i64 + 3,
+        11,
+        0,
+    ) - BOOKING_RULES.offset_ms();
+
+    // Doğru jetonun önekini taşıyan tahmin, hiç benzemeyen jeton, ve boş jeton.
+    let near_miss = format!("{}x", &csrf[..csrf.len() - 1]);
+    for forged in [near_miss.as_str(), "tamamen-baska-bir-jeton", ""] {
+        let refused = server
+            .request(
+                Method::POST,
+                "/api/admin/appointments",
+                &[("Cookie", cookie.as_str()), ("x-csrf-token", forged)],
+                Some(json!({
+                    "serviceId": "medical-fitness",
+                    "start": to_iso_string(start_at),
+                    "name": "Sahte Jeton",
+                    "phone": "+905551112233"
+                })),
+            )
+            .await;
+        assert_eq!(
+            refused.status, 403,
+            "yanlış jeton reddedilmeli: {forged:?} → {:?}",
+            refused.body
+        );
+        assert_eq!(refused.body["error"]["code"], "CSRF_ERROR");
+    }
+
+    // Doğru jetonla aynı istek geçmeli; test yalnızca reddi değil kabulü de bağlar.
+    let accepted = server
+        .request(
+            Method::POST,
+            "/api/admin/appointments",
+            &[("Cookie", cookie.as_str()), ("x-csrf-token", csrf.as_str())],
+            Some(json!({
+                "serviceId": "medical-fitness",
+                "start": to_iso_string(start_at),
+                "name": "Gerçek Jeton",
+                "phone": "+905551112233"
+            })),
+        )
+        .await;
+    assert_eq!(accepted.status, 201, "{:?}", accepted.body);
+}

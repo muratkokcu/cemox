@@ -534,7 +534,9 @@ async fn require_admin(
             .get("x-csrf-token")
             .and_then(|value| value.to_str().ok())
             .unwrap_or("");
-        if provided != session.csrf_token {
+        // Oturum ve şifre karşılaştırmalarıyla aynı ölçü: eşleşme sabit zamanda
+        // aranır, `!=` ilk farklı baytta durup kaç baytın tuttuğunu sızdırmasın.
+        if !bool::from(provided.as_bytes().ct_eq(session.csrf_token.as_bytes())) {
             return AppError::forbidden("CSRF_ERROR", "Güvenlik doğrulaması başarısız.")
                 .into_response();
         }

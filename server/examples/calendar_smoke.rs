@@ -29,10 +29,15 @@ async fn main() {
     let env: HashMap<String, String> = std::env::vars().collect();
     let Some(calendar) = GoogleCalendar::from_env(&env) else {
         eprintln!("✗ Servis hesabı okunamadı.");
-        eprintln!("  GOOGLE_SERVICE_ACCOUNT tanımlı mı? JSON dosyasının yolu ya da JSON'un kendisi olmalı.");
+        eprintln!(
+            "  GOOGLE_SERVICE_ACCOUNT tanımlı mı? JSON dosyasının yolu ya da JSON'un kendisi olmalı."
+        );
         std::process::exit(1);
     };
-    println!("✓ Anahtar okundu — servis hesabı: {}", calendar.client_email());
+    println!(
+        "✓ Anahtar okundu — servis hesabı: {}",
+        calendar.client_email()
+    );
     println!("  Takvim bu adresle paylaşılmış olmalı.\n");
 
     // Kesin geçmişte bir saat: yanlışlıkla gerçek bir randevunun üstüne yazmasın.
@@ -82,7 +87,9 @@ async fn main() {
         }
         Err(error) => {
             eprintln!("✗ Güncellenemedi: {error}");
-            eprintln!("  Paylaşım izni \"Etkinliklerde değişiklik yap\" değil, salt okunur olabilir.");
+            eprintln!(
+                "  Paylaşım izni \"Etkinliklerde değişiklik yap\" değil, salt okunur olabilir."
+            );
             std::process::exit(1);
         }
     }

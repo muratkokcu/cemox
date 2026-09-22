@@ -372,7 +372,6 @@ async fn disabling_the_connection_stops_all_traffic() {
     );
 }
 
-
 /// Antrenör etkinliği kendi takviminden silerse Google onu yok etmez;
 /// `status: "cancelled"` olarak işaretler ve sonraki PATCH'e **200** döner.
 /// Yanıtın durumuna bakılmazsa uygulama güncellediğini sanır, sağlık
@@ -418,7 +417,10 @@ async fn an_event_deleted_from_the_calendar_is_recreated() {
         )
         .await;
     assert_eq!(created.status, 201);
-    let appointment_id = created.body["appointment"]["id"].as_str().unwrap().to_string();
+    let appointment_id = created.body["appointment"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
 
     tokio::time::sleep(std::time::Duration::from_millis(300)).await;
     assert_eq!(

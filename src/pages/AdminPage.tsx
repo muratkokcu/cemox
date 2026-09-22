@@ -186,6 +186,13 @@ function AdminLogin({ message, onLogin }: { message: string; onLogin: (csrf: str
 function AdminDashboard({ csrf, onExpired }: { csrf: string; onExpired: () => void }) {
   const [services, setServices] = useState<Service[]>([]);
   const [rules, setRules] = useState<BookingRules>(DEFAULT_RULES);
+  /**
+   * Girişte gösterilen onay bekleyenler listesi. `null` iken modal kapalıdır.
+   * Panele her girişte bir kez açılır; otomatik yenileme onu geri getirmez,
+   * yoksa kapatan kişinin önüne birkaç saniyede bir yeniden çıkardı.
+   */
+  const [pendingReview, setPendingReview] = useState<Appointment[] | null>(null);
+  const pendingReviewShown = useRef(false);
   const slotMs = rules.sessionMinutes * 60_000;
   const [serviceId, setServiceId] = useState('');
   const [month, setMonth] = useState(monthKey(localDateKey()));
@@ -260,6 +267,20 @@ function AdminDashboard({ csrf, onExpired }: { csrf: string; onExpired: () => vo
         setServiceId(current => current || result.services[0]?.id || '');
       })
       .catch(guard);
+  }, [guard]);
+
+  /**
+   * Panele girişte onay bekleyen talepleri bir kez önümüze koyar. Onay,
+   * kullanıcının listeyi kendiliğinden kontrol etmesine bırakıldığında
+   * atlanabiliyor; asıl maliyeti olan iş de bu.
+   */
+  useEffect(() => {
+    if (pendingReviewShown.current) return;
+    pendingReviewShown.current = true;
+    api<{ appointments: Appointment[] }>('/api/admin/appointments?status=PENDING&limit=50')
+      .then(result => { if (result.appointments.length) setPendingReview(result.appointments); })
+      // Sessiz: bu bir kolaylık, panelin açılmasını engellememeli.
+      .catch(err => { if (err instanceof ApiError && err.status === 401) guard(err); });
   }, [guard]);
 
   const loadData = useCallback(async () => {
@@ -575,7 +596,13 @@ function AdminDashboard({ csrf, onExpired }: { csrf: string; onExpired: () => vo
         method: 'PATCH', body: JSON.stringify({ action: decision.action, adminNote })
       }, csrf);
       const message = decision.action === 'approve' ? 'Randevu onaylandı.' : decision.action === 'reject' ? 'Randevu talebi reddedildi.' : 'Randevu iptal edildi.';
+      const decidedId = decision.appointment.id;
       setDecision(null);
+      setPendingReview(current => {
+        if (!current) return current;
+        const rest = current.filter(item => item.id !== decidedId);
+        return rest.length ? rest : null;
+      });
       notify(message);
       await refreshAll();
     } catch (err) {
@@ -816,6 +843,15 @@ function AdminDashboard({ csrf, onExpired }: { csrf: string; onExpired: () => vo
           onCreate={openManual}
         />
       </main>
+      {pendingReview && (
+        <PendingReviewModal
+          appointments={pendingReview}
+          locked={decision !== null}
+          onDecide={openDecision}
+          onEdit={openEdit}
+          onClose={() => setPendingReview(null)}
+        />
+      )}
       {decision && <DecisionModal decision={decision} busy={decisionBusy} error={decisionError} onClose={() => { if (!decisionBusy) setDecision(null); }} onConfirm={decide} />}
       {blockDraft && (
         <BlockModal
@@ -1744,6 +1780,57 @@ function BlockRemoveModal({ block, busy, error, use24Hour, onClose, onConfirm }:
           <button type="button" className="decision-primary" autoFocus disabled={busy} onClick={onConfirm}>
             {busy ? <><LoaderCircle className="spin" size={16} /> Kaldırılıyor…</> : 'Kaydı kaldır'}
           </button>
+        </footer>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Girişte onay bekleyen talepleri önümüze koyar.
+ *
+ * `locked`, üstüne karar penceresi açıldığında doğrudur: o sırada Escape'in
+ * alttaki listeyi kapatması, kullanıcının kapatmak istediği pencereyi açık
+ * bırakıp asıl bağlamı yok ederdi.
+ */
+function PendingReviewModal({ appointments, locked, onDecide, onEdit, onClose }: {
+  appointments: Appointment[];
+  locked: boolean;
+  onDecide: (appointment: Appointment, action: DecisionAction) => void;
+  onEdit: (appointment: Appointment) => void;
+  onClose: () => void;
+}) {
+  const dialogRef = useModalShell(locked, onClose);
+  // Tutma süresi geri sayımı burada da canlı kalmalı; kartlar onu gösteriyor.
+  const now = useTicker(1000);
+  const count = appointments.length;
+  return (
+    <div className="decision-backdrop" onMouseDown={event => { if (event.target === event.currentTarget && !locked) onClose(); }}>
+      <div className="decision-modal pending-review" role="dialog" aria-modal="true" aria-labelledby="pending-review-title" tabIndex={-1} ref={dialogRef}>
+        <header className="decision-header">
+          <span className="decision-icon"><BellRing /></span>
+          <div>
+            <span className="eyebrow">Yönetim</span>
+            <h2 id="pending-review-title">Onay bekleyen {count} talep</h2>
+          </div>
+          <button type="button" className="decision-close" aria-label="Pencereyi kapat" onClick={onClose}><X size={18} /></button>
+        </header>
+        <p className="decision-description">
+          Bu talepler 24 saat içinde sonuçlandırılmazsa düşer ve seçilen saat yeniden açılır.
+        </p>
+        <div className="pending-review-list">
+          {appointments.map(appointment => (
+            <AppointmentCard
+              key={appointment.id}
+              appointment={appointment}
+              now={now}
+              onDecide={onDecide}
+              onEdit={onEdit}
+            />
+          ))}
+        </div>
+        <footer>
+          <button type="button" className="decision-secondary" onClick={onClose}>Sonra bakacağım</button>
         </footer>
       </div>
     </div>

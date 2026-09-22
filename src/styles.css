@@ -624,3 +624,24 @@ body:has(.lightbox.active) .whatsapp-fab { display: none; }
   .whatsapp-fab { padding: 14px; gap: 0; }
   .whatsapp-fab span { display: none; }
 }
+
+/* Girişte açılan onay listesi. Karar kartları normal listedekinden geniş
+   olduğu için pencere büyür; talep sayısı arttığında da ekranı taşmasın diye
+   yalnızca liste kayar, başlık ve alt bar yerinde kalır. */
+.decision-modal.pending-review { width: min(680px, 100%); display: flex; flex-direction: column; max-height: min(84vh, 760px); }
+.pending-review .decision-description { margin-bottom: 4px; }
+.pending-review-list { display: flex; flex-direction: column; gap: 12px; overflow-y: auto; margin: 0 -4px; padding: 4px; }
+/* Kart, liste görünümünde dört sütuna yayılıyor; pencere içinde o genişlik
+   yok, sütunlar taşıp onay düğmelerini kırpıyordu. Dar yerleşim burada da
+   geçerli: tarih üstte, kişi solda, düğmeler tam genişlikte altta. */
+.pending-review-list .appointment-card { grid-template-columns: 1fr auto; gap: 12px; }
+.pending-review-list .appointment-date { grid-column: 1/-1; }
+.pending-review-list .appointment-person { grid-column: 1; }
+.pending-review-list .appointment-actions { grid-column: 1/-1; justify-content: flex-end; }
+.pending-review footer { display: flex; justify-content: flex-end; padding-top: 16px; margin-top: 4px; border-top: 1px solid var(--soft-line); }
+.pending-review .decision-secondary { padding: 11px 18px; border: 1px solid var(--line); border-radius: 9px; color: var(--ink); background: var(--paper); font: inherit; font-weight: 600; cursor: pointer; }
+.pending-review .decision-secondary:hover { border-color: var(--green); color: var(--green); }
+
+@media (max-width: 700px) {
+  .decision-modal.pending-review { max-height: 92vh; }
+}

@@ -78,6 +78,14 @@ pub struct SmtpConfig {
 pub struct Config {
     pub env: String,
     pub production: bool,
+    /// Uygulamanın önünde kaç katman **güvenilen** ters vekil olduğu.
+    ///
+    /// Sıfırken `X-Forwarded-For` tamamen yok sayılır ve istemci adresi soket
+    /// bağlantısından alınır. Başlığa koşulsuz güvenmek, oran sınırlarının
+    /// tamamını tek bir başlıkla aşılabilir hale getirir: saldırgan her istekte
+    /// farklı bir değer yazarak giriş denemesi sınırını kaldırabilir ve işlem
+    /// kaydına istediği IP'yi yazdırabilir.
+    pub trusted_proxy_hops: usize,
     pub port: u16,
     pub app_origin: String,
     pub database_path: String,
@@ -119,6 +127,14 @@ pub fn load_config(env: &HashMap<String, String>) -> Result<Config, String> {
         return Err("SESSION_SECRET en az 32 karakter olmalıdır.".into());
     }
 
+    // Varsayılan sıfır: yanlış yapılandırılmış bir kurulum güvenli tarafta kalsın.
+    // Tek katman nginx/Caddy arkasındaysanız 1 verin.
+    let trusted_proxy_hops = get(env, "TRUSTED_PROXY_HOPS")
+        .map(|value| value.trim().parse::<usize>())
+        .transpose()
+        .map_err(|_| "TRUSTED_PROXY_HOPS bir tam sayı olmalıdır.".to_string())?
+        .unwrap_or(0);
+
     let app_origin = get(env, "APP_ORIGIN")
         .unwrap_or_else(|| {
             if production {
@@ -141,6 +157,7 @@ pub fn load_config(env: &HashMap<String, String>) -> Result<Config, String> {
     Ok(Config {
         env: node_env.unwrap_or_else(|| "development".into()),
         production,
+        trusted_proxy_hops,
         port: get(env, "PORT")
             .and_then(|value| value.parse().ok())
             .unwrap_or(4100),

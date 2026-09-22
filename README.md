@@ -143,6 +143,18 @@ hesapları paylaşılmayan takvimi "yok" olarak görür, "izin yok" demez.
 TLS yapılandırmasını yeni bir ortamda doğrulamak için:
 `cargo run --manifest-path server/Cargo.toml --example tls_smoke`
 
+## Ters vekil arkasında
+
+Oran sınırları ve işlem kaydı istemci adresine dayanır, o yüzden adresin
+saldırgan tarafından belirlenememesi gerekir. `X-Forwarded-For` yalnızca
+`TRUSTED_PROXY_HOPS` sıfırdan büyükse okunur ve zincirin **sonundan** geriye
+sayılır: vekiller başlığa ekleme yaptığı için soldaki girdiler istemcinin kendi
+yazdıklarıdır. Tek katman nginx/Caddy arkasında `TRUSTED_PROXY_HOPS=1` verin.
+
+Varsayılan sıfırdır; doğrudan açılan bir kurulumda başlık tamamen yok sayılır.
+Yanlış yapılandırıldığında kaybedilen tek şey gerçek istemci IP'sidir — başlığa
+körlemesine güvenmek ise giriş denemesi sınırını tek bir başlıkla kaldırır.
+
 ## Güvenlik
 
 Şifre panelden değiştirilir; değişiklikte diğer cihazlardaki oturumlar kapanır,

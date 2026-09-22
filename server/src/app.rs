@@ -445,13 +445,21 @@ async fn not_found(request: Request) -> Response {
 async fn security_headers(State(state): State<AppState>, request: Request, next: Next) -> Response {
     let mut response = next.run(request).await;
     let headers = response.headers_mut();
+    // Üretim derlemesi satır içi script üretmiyor (tek `<script src>`), bu yüzden
+    // `script-src` orada `'unsafe-inline'` içermez: XSS bulunsa bile enjekte
+    // edilen script çalışmaz. Geliştirmede Vite kendi önyükleme kodunu satır içi
+    // yazdığı için izin korunur.
     headers.insert(
         header::CONTENT_SECURITY_POLICY,
-        HeaderValue::from_static(
+        HeaderValue::from_static(if state.config.production {
+            "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; \
+             font-src https://fonts.gstatic.com; script-src 'self'; connect-src 'self'; \
+             frame-ancestors 'self'; base-uri 'self'; form-action 'self'; object-src 'none'"
+        } else {
             "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; \
              font-src https://fonts.gstatic.com; script-src 'self' 'unsafe-inline'; connect-src 'self'; \
-             frame-ancestors 'self'; base-uri 'self'; form-action 'self'",
-        ),
+             frame-ancestors 'self'; base-uri 'self'; form-action 'self'; object-src 'none'"
+        }),
     );
     headers.insert(
         header::REFERRER_POLICY,
@@ -566,7 +574,7 @@ async fn rate_limit(
 ) -> Response {
     let key = format!(
         "{}:{}",
-        client_ip(&request, state.config.production),
+        client_ip(&request, state.config.trusted_proxy_hops),
         request.uri().path()
     );
     if !limiter.check(&key, now_ms()) {
@@ -581,24 +589,52 @@ async fn rate_limit(
 }
 
 /// Üretimde tek katman ters vekil varsayılır (`trust proxy = 1`).
-fn client_ip(request: &Request, production: bool) -> String {
-    if production
-        && let Some(forwarded) = request
-            .headers()
-            .get("x-forwarded-for")
-            .and_then(|value| value.to_str().ok())
-        && let Some(first) = forwarded.split(',').next()
-    {
-        let first = first.trim();
-        if !first.is_empty() {
-            return first.to_string();
-        }
+/// İstemci adresi. Oran sınırları ve işlem kaydı buna dayandığı için
+/// saldırganın belirleyebildiği bir değer olmamalıdır.
+///
+/// `X-Forwarded-For` yalnızca güvenilen vekil sayısı kadar sağdan geriye
+/// sayılarak okunur. Vekiller başlığa **ekleme** yapar (nginx'in
+/// `$proxy_add_x_forwarded_for` davranışı), yani soldaki girdiler istemcinin
+/// kendi yazdıklarıdır; en soldakini almak adresi doğrudan saldırgana
+/// bırakırdı. Tek katman vekilde doğru değer en sağdakidir.
+fn client_ip(request: &Request, trusted_proxy_hops: usize) -> String {
+    let peer = || {
+        request
+            .extensions()
+            .get::<ConnectInfo<SocketAddr>>()
+            .map(|ConnectInfo(address)| address.ip().to_string())
+            .unwrap_or_else(|| "unknown".into())
+    };
+    if trusted_proxy_hops == 0 {
+        return peer();
     }
-    request
-        .extensions()
-        .get::<ConnectInfo<SocketAddr>>()
-        .map(|ConnectInfo(address)| address.ip().to_string())
-        .unwrap_or_else(|| "unknown".into())
+    let Some(forwarded) = request
+        .headers()
+        .get("x-forwarded-for")
+        .and_then(|value| value.to_str().ok())
+    else {
+        return peer();
+    };
+    pick_forwarded(forwarded, trusted_proxy_hops).unwrap_or_else(peer)
+}
+
+/// `X-Forwarded-For` zincirinden güvenilen vekil sayısına göre istemciyi seçer.
+///
+/// Vekiller başlığa ekleme yaptığı için zincirin sonu bize en yakın olandır:
+/// tek katman vekilde doğru değer en sağdaki, yani vekilin kendi gördüğü
+/// adrestir. Zincir beklenenden kısaysa `None` döner ve çağıran gerçek eşe
+/// düşer — uydurulmuş bir girdiyi istemci adresi saymaktansa.
+fn pick_forwarded(header: &str, trusted_proxy_hops: usize) -> Option<String> {
+    if trusted_proxy_hops == 0 {
+        return None;
+    }
+    let hops: Vec<&str> = header
+        .split(',')
+        .map(str::trim)
+        .filter(|entry| !entry.is_empty())
+        .collect();
+    let index = hops.len().checked_sub(trusted_proxy_hops)?;
+    hops.get(index).map(|entry| (*entry).to_string())
 }
 
 // ---- genel uçlar ----------------------------------------------------------
@@ -687,7 +723,7 @@ async fn admin_login(
     State(state): State<AppState>,
     request: Request,
 ) -> Result<Response, AppError> {
-    let ip = client_ip(&request, state.config.production);
+    let ip = client_ip(&request, state.config.trusted_proxy_hops);
     let body = read_body(request).await?;
     let payload = parse_json(&body)?;
     let password = as_string(&payload, "password");
@@ -728,7 +764,7 @@ async fn admin_logout(
     Extension(admin): Extension<AdminContext>,
     request: Request,
 ) -> Result<Response, AppError> {
-    let ip = client_ip(&request, state.config.production);
+    let ip = client_ip(&request, state.config.trusted_proxy_hops);
     let db = state.db.clone();
     blocking(move || db.delete_session(&admin.token)).await?;
     state.audit("auth.logout", "", &ip).await;
@@ -945,7 +981,7 @@ async fn admin_update_appointment(
     Path(id): Path<String>,
     request: Request,
 ) -> Result<Json<Value>, AppError> {
-    let ip = client_ip(&request, state.config.production);
+    let ip = client_ip(&request, state.config.trusted_proxy_hops);
     let body = read_body(request).await?;
     let payload = parse_json(&body)?;
     let input = validate_admin_appointment(&payload)?;
@@ -1004,7 +1040,7 @@ async fn admin_create_appointment(
     State(state): State<AppState>,
     request: Request,
 ) -> Result<Response, AppError> {
-    let ip = client_ip(&request, state.config.production);
+    let ip = client_ip(&request, state.config.trusted_proxy_hops);
     let body = read_body(request).await?;
     let payload = parse_json(&body)?;
     let input = validate_admin_appointment(&payload)?;
@@ -1052,7 +1088,7 @@ async fn admin_decide_appointment(
     Path(id): Path<String>,
     request: Request,
 ) -> Result<Response, AppError> {
-    let ip = client_ip(&request, state.config.production);
+    let ip = client_ip(&request, state.config.trusted_proxy_hops);
     let body = read_body(request).await?;
     let payload = parse_json(&body)?;
     let action = as_string(&payload, "action");
@@ -1131,7 +1167,7 @@ async fn admin_set_calendar(
     State(state): State<AppState>,
     request: Request,
 ) -> Result<Json<Value>, AppError> {
-    let ip = client_ip(&request, state.config.production);
+    let ip = client_ip(&request, state.config.trusted_proxy_hops);
     let body = read_body(request).await?;
     let payload = parse_json(&body)?;
 
@@ -1189,7 +1225,7 @@ async fn admin_change_password(
     Extension(admin): Extension<AdminContext>,
     request: Request,
 ) -> Result<Json<Value>, AppError> {
-    let ip = client_ip(&request, state.config.production);
+    let ip = client_ip(&request, state.config.trusted_proxy_hops);
     let body = read_body(request).await?;
     let payload = parse_json(&body)?;
 
@@ -1257,7 +1293,7 @@ async fn admin_set_working_hours(
     State(state): State<AppState>,
     request: Request,
 ) -> Result<Json<Value>, AppError> {
-    let ip = client_ip(&request, state.config.production);
+    let ip = client_ip(&request, state.config.trusted_proxy_hops);
     let body = read_body(request).await?;
     let payload = parse_json(&body)?;
     let entries = payload
@@ -1359,7 +1395,7 @@ async fn admin_create_block(
     State(state): State<AppState>,
     request: Request,
 ) -> Result<Response, AppError> {
-    let ip = client_ip(&request, state.config.production);
+    let ip = client_ip(&request, state.config.trusted_proxy_hops);
     let body = read_body(request).await?;
     let payload = parse_json(&body)?;
     let start_at = timestamp_field(&payload, "start", "Başlangıç")?;
@@ -1402,7 +1438,7 @@ async fn admin_delete_block(
     Path(id): Path<String>,
     request: Request,
 ) -> Result<Response, AppError> {
-    let ip = client_ip(&request, state.config.production);
+    let ip = client_ip(&request, state.config.trusted_proxy_hops);
     let db = state.db.clone();
     let removed = blocking(move || db.delete_block(&id)).await?;
     if !removed {
@@ -1438,7 +1474,7 @@ async fn admin_set_slots_bulk(
     State(state): State<AppState>,
     request: Request,
 ) -> Result<Json<Value>, AppError> {
-    let ip = client_ip(&request, state.config.production);
+    let ip = client_ip(&request, state.config.trusted_proxy_hops);
     let body = read_body(request).await?;
     let payload = parse_json(&body)?;
     let service_id = as_string(&payload, "serviceId");
@@ -1947,5 +1983,36 @@ impl RateLimiter {
             buckets.retain(|_, bucket| bucket.reset_at > now);
         }
         allowed
+    }
+}
+
+#[cfg(test)]
+mod client_ip_tests {
+    use super::pick_forwarded;
+
+    #[test]
+    fn an_untrusted_deployment_ignores_the_header() {
+        assert_eq!(pick_forwarded("203.0.113.9", 0), None);
+    }
+
+    #[test]
+    fn one_proxy_takes_what_the_proxy_saw_not_what_the_client_claimed() {
+        // Saldırgan başlığı kendi yazar, vekil gerçek adresi sona ekler.
+        let forged = "203.0.113.9, 198.51.100.4";
+        assert_eq!(pick_forwarded(forged, 1).as_deref(), Some("198.51.100.4"));
+    }
+
+    #[test]
+    fn two_proxies_step_back_two_entries() {
+        let chain = "203.0.113.9, 10.0.0.5, 10.0.0.6";
+        assert_eq!(pick_forwarded(chain, 2).as_deref(), Some("10.0.0.5"));
+    }
+
+    /// Zincir beklenenden kısa: vekil başlığı yazmamış olabilir. Kalan tek
+    /// girdi istemcinin kendi yazdığı olabileceği için kabul edilmez.
+    #[test]
+    fn a_chain_shorter_than_expected_is_refused() {
+        assert_eq!(pick_forwarded("203.0.113.9", 2), None);
+        assert_eq!(pick_forwarded("", 1), None);
     }
 }

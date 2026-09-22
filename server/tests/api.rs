@@ -2050,3 +2050,89 @@ async fn a_session_that_overruns_closing_time_is_not_offered() {
         "17:00 kapanışı taştığı için sunulmamalı: {starts:?}"
     );
 }
+
+/// `X-Forwarded-For` başlığına koşulsuz güvenmek, oran sınırlarının tamamını
+/// tek bir başlıkla aşılabilir kılar: saldırgan her istekte farklı bir değer
+/// yazarak giriş denemesi sınırını kaldırabilir ve işlem kaydına istediği
+/// IP'yi yazdırabilir. Güvenilen vekil sayısı sıfırken başlık yok sayılmalı.
+#[tokio::test]
+async fn a_forged_forwarded_header_cannot_lift_the_login_rate_limit() {
+    let server = common::start().await;
+    let mut codes = Vec::new();
+    for attempt in 0..8 {
+        let forged = format!("203.0.113.{attempt}");
+        let response = server
+            .request(
+                Method::POST,
+                "/api/admin/login",
+                &[("X-Forwarded-For", forged.as_str())],
+                Some(json!({ "password": "kesinlikle-yanlis-sifre" })),
+            )
+            .await;
+        codes.push(response.status);
+    }
+    assert!(
+        codes.contains(&429),
+        "sahte başlıkla sınır aşılmamalı, dönen kodlar: {codes:?}"
+    );
+}
+
+/// Elektronik tablolar `=`, `+`, `-`, `@` ile başlayan hücreleri hesaplar.
+/// Ad alanına formül yazan bir danışan, dosyayı açan antrenörün makinesinde
+/// onu çalıştırır; CSV tırnağı bunu engellemez.
+#[tokio::test]
+async fn exported_cells_cannot_start_a_spreadsheet_formula() {
+    let server = common::start().await;
+    let (cookie, csrf) = server.login().await;
+    let headers = [("Cookie", cookie.as_str()), ("x-csrf-token", csrf.as_str())];
+
+    let local_now = cemox_server::time::civil_from_ms(now_ms() + BOOKING_RULES.offset_ms());
+    let start_at = cemox_server::time::utc_ms_hm(
+        local_now.year,
+        local_now.month as i64 - 1,
+        local_now.day as i64 + 3,
+        11,
+        0,
+    ) - BOOKING_RULES.offset_ms();
+
+    let created = server
+        .request(
+            Method::POST,
+            "/api/admin/appointments",
+            &headers,
+            Some(json!({
+                "serviceId": "medical-fitness",
+                "start": to_iso_string(start_at),
+                "name": "=HYPERLINK(\"http://kotu.example\")",
+                "phone": "+905551112233",
+                "note": "@SUM(A1:A9)"
+            })),
+        )
+        .await;
+    assert_eq!(created.status, 201, "{:?}", created.body);
+
+    let export = server
+        .request(
+            Method::GET,
+            "/api/admin/appointments/export?format=csv",
+            &[("Cookie", cookie.as_str())],
+            None,
+        )
+        .await;
+    assert_eq!(export.status, 200);
+    let csv = String::from_utf8_lossy(&export.bytes).to_string();
+
+    for line in csv.lines().skip(1) {
+        for cell in line.split(';') {
+            let value = cell.trim_matches('"');
+            assert!(
+                !value.starts_with(['=', '+', '-', '@']),
+                "hücre formül olarak başlıyor: {value:?}\nsatır: {line}"
+            );
+        }
+    }
+    assert!(
+        csv.contains("'=HYPERLINK") && csv.contains("'+905551112233") && csv.contains("'@SUM"),
+        "tehlikeli hücreler metin olarak işaretlenmeli:\n{csv}"
+    );
+}

@@ -143,6 +143,17 @@ hesapları paylaşılmayan takvimi "yok" olarak görür, "izin yok" demez.
 TLS yapılandırmasını yeni bir ortamda doğrulamak için:
 `cargo run --manifest-path server/Cargo.toml --example tls_smoke`
 
+## Sertleştirme neye bakar
+
+Oturum çerezinin `Secure` bayrağı ve HSTS, `NODE_ENV`'e değil **`APP_ORIGIN`**'e
+bakar. Sebep: bir ortam değişkeninin *yokluğu* korumayı kapatmamalı. Geri döngü
+adresleri (`http://localhost`, `http://127.0.0.1`) dışındaki her adreste çerez
+`Secure` alır; yanlış yapılandırılmış bir kurulum sessizce korumasız kalmak
+yerine görünür şekilde bozulur.
+
+`ADMIN_PASSWORD` ve `SESSION_SECRET` her ortamda zorunludur. Tanımlı değillerse
+sunucu açılmaz.
+
 ## Ters vekil arkasında
 
 Oran sınırları ve işlem kaydı istemci adresine dayanır, o yüzden adresin

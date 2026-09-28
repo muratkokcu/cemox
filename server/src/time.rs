@@ -214,12 +214,25 @@ fn split_offset(rest: &str) -> Option<(&str, i64)> {
         let digits = &offset_text[1..];
         let (hours, minutes) = match digits.split_once(':') {
             Some((hours, minutes)) => (hours, minutes),
-            None if digits.len() == 4 => (&digits[0..2], &digits[2..4]),
+            // Basamak olduğu kesilmeden önce doğrulanır. `len()` bayt sayar;
+            // ASCII olmayan dört baytlık bir ek ("aあ" gibi) uzunluk denetimini
+            // geçer ama bayt 2 karakterin ortasına düşer ve dilimleme panikler.
+            // Girdi kimlik doğrulaması istemeyen randevu gövdesinden geldiği
+            // için bu, ağdan tetiklenebilen bir panikti.
+            None if digits.len() == 4 && digits.as_bytes().iter().all(u8::is_ascii_digit) => {
+                (&digits[0..2], &digits[2..4])
+            }
+            // Bu kol dilimlemiyor; ASCII olmayan girdi aşağıdaki `parse` ile düşer.
             None if digits.len() == 2 => (digits, "0"),
             None => return None,
         };
         let hours: i64 = hours.parse().ok()?;
         let minutes: i64 = minutes.parse().ok()?;
+        // Ofset aralığa sığmalı: sınırsız bırakılırsa `hours * 60` taşar —
+        // hata ayıklama derlemesinde panik, sürümde sessizce yanlış saat.
+        if !(0..=23).contains(&hours) || !(0..=59).contains(&minutes) {
+            return None;
+        }
         return Some((clock, sign * (hours * 60 + minutes)));
     }
     // Saat dilimi yoksa JS bunu yerel saat kabul eder; sunucu tarafında UTC varsayıyoruz.

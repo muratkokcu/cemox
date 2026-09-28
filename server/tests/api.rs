@@ -2155,7 +2155,15 @@ async fn a_wrong_csrf_token_is_refused_whatever_its_prefix() {
     ) - BOOKING_RULES.offset_ms();
 
     // Doğru jetonun önekini taşıyan tahmin, hiç benzemeyen jeton, ve boş jeton.
-    let near_miss = format!("{}x", &csrf[..csrf.len() - 1]);
+    // Son karakter sabit bir harfle değiştirilemez: jeton zaten o harfle
+    // bitiyorsa "yakın tahmin" doğru jetonun kendisi olur ve test, 64 koşuda
+    // bir, kendi kurduğu tuzağa düşerdi.
+    let last = csrf.chars().next_back().expect("csrf jetonu boş");
+    let near_miss = format!(
+        "{}{}",
+        &csrf[..csrf.len() - 1],
+        if last == 'x' { 'y' } else { 'x' }
+    );
     for forged in [near_miss.as_str(), "tamamen-baska-bir-jeton", ""] {
         let refused = server
             .request(
@@ -2193,4 +2201,72 @@ async fn a_wrong_csrf_token_is_refused_whatever_its_prefix() {
         )
         .await;
     assert_eq!(accepted.status, 201, "{:?}", accepted.body);
+}
+
+/// Kimlik bilgileri eksikken sunucu açılmamalı.
+///
+/// Daha önce `NODE_ENV` üretim değilse kaynakta görünen sabit bir parola
+/// devreye giriyordu; dinleyici 0.0.0.0'a bağlandığı için bu, değişkeni
+/// tanımlamayı unutan her kurulumda herkesin bildiği bir parolayla yönetici
+/// girişi demekti. Yokluk artık güvensiz bir varsayılana değil, açılmayan bir
+/// sunucuya çıkmalı — ortamdan bağımsız olarak.
+#[test]
+fn missing_credentials_refuse_to_start_in_every_environment() {
+    use cemox_server::config::load_config;
+
+    for environment in ["production", "development", "test", ""] {
+        let mut env = common::test_env();
+        env.insert("NODE_ENV".into(), environment.into());
+        env.remove("ADMIN_PASSWORD");
+        let refused = load_config(&env);
+        assert!(
+            refused.is_err(),
+            "NODE_ENV={environment:?} iken parolasız açılmamalı"
+        );
+
+        let mut env = common::test_env();
+        env.insert("NODE_ENV".into(), environment.into());
+        env.remove("SESSION_SECRET");
+        assert!(
+            load_config(&env).is_err(),
+            "NODE_ENV={environment:?} iken secret'sız açılmamalı"
+        );
+    }
+}
+
+/// Çerezin `Secure` bayrağı ve HSTS bir ortam dizgisine bağlı olmamalı: bir
+/// değişkenin yokluğu, yönetici oturum jetonunun düz HTTP'ye düşmesine yol
+/// açmamalı. Sertleştirme sitenin gerçek adresinden türetilir ve yalnızca geri
+/// döngüde gevşer.
+#[test]
+fn transport_hardening_follows_the_address_not_the_environment() {
+    use cemox_server::config::load_config;
+
+    let hardened = |origin: &str, environment: &str| -> bool {
+        let mut env = common::test_env();
+        env.insert("APP_ORIGIN".into(), origin.into());
+        env.insert("NODE_ENV".into(), environment.into());
+        load_config(&env)
+            .expect("yapılandırma yüklenmeli")
+            .secure_transport
+    };
+
+    // Asıl bulgu: üretim dışı bir ortam adı sertleştirmeyi kapatmamalı.
+    assert!(
+        hardened("https://cemavat.com", "development"),
+        "HTTPS adres, ortam adı ne olursa olsun sertleştirilmeli"
+    );
+    assert!(
+        hardened("https://cemavat.com", ""),
+        "NODE_ENV tanımsızken de sertleştirilmeli"
+    );
+    // Yanlış yapılandırma (HTTPS proxy arkasında düz HTTP adresi) sıkı tarafta
+    // kalmalı — sessizce korumasız kalmaktansa görünür şekilde bozulsun.
+    assert!(
+        hardened("http://cemavat.com", "production"),
+        "geri döngü olmayan düz HTTP adres sıkı tarafta kalmalı"
+    );
+    // Yalnızca geri döngü gevşer; tarayıcılar orayı zaten güvenli bağlam sayar.
+    assert!(!hardened("http://localhost:4100", "development"));
+    assert!(!hardened("http://127.0.0.1:4100", "production"));
 }

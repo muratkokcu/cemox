@@ -477,7 +477,7 @@ async fn security_headers(State(state): State<AppState>, request: Request, next:
         HeaderName::from_static("permissions-policy"),
         HeaderValue::from_static("camera=(), microphone=(), geolocation=()"),
     );
-    if state.config.production {
+    if state.config.secure_transport {
         headers.insert(
             header::STRICT_TRANSPORT_SECURITY,
             HeaderValue::from_static("max-age=31536000; includeSubDomains"),
@@ -747,8 +747,11 @@ async fn admin_login(
     .into_response();
     response.headers_mut().insert(
         header::SET_COOKIE,
-        HeaderValue::from_str(&session_cookie(&session.token, state.config.production))
-            .map_err(|_| AppError::internal("çerez oluşturulamadı"))?,
+        HeaderValue::from_str(&session_cookie(
+            &session.token,
+            state.config.secure_transport,
+        ))
+        .map_err(|_| AppError::internal("çerez oluşturulamadı"))?,
     );
     Ok(response)
 }
@@ -774,7 +777,7 @@ async fn admin_logout(
     let mut response = Json(json!({ "ok": true })).into_response();
     response.headers_mut().insert(
         header::SET_COOKIE,
-        HeaderValue::from_str(&cleared_cookie(state.config.production))
+        HeaderValue::from_str(&cleared_cookie(state.config.secure_transport))
             .map_err(|_| AppError::internal("çerez temizlenemedi"))?,
     );
     Ok(response)
@@ -1870,22 +1873,25 @@ fn percent_decode(value: &str) -> String {
     String::from_utf8_lossy(&output).into_owned()
 }
 
-fn session_cookie(token: &str, production: bool) -> String {
+/// Oturum çerezi. `Secure`, adresten türetilen taşıma sertleştirmesine bağlıdır:
+/// bir ortam değişkeninin yokluğu, yönetici jetonunun düz HTTP'ye düşmesine
+/// yol açmamalı.
+fn session_cookie(token: &str, secure_transport: bool) -> String {
     let mut cookie = format!(
         "{SESSION_COOKIE}={token}; Max-Age={}; Path=/; HttpOnly; SameSite=Strict",
         SESSION_TTL_MS / 1000
     );
-    if production {
+    if secure_transport {
         cookie.push_str("; Secure");
     }
     cookie
 }
 
-fn cleared_cookie(production: bool) -> String {
+fn cleared_cookie(secure_transport: bool) -> String {
     let mut cookie = format!(
         "{SESSION_COOKIE}=; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT; Path=/; HttpOnly; SameSite=Strict"
     );
-    if production {
+    if secure_transport {
         cookie.push_str("; Secure");
     }
     cookie

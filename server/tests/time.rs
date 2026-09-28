@@ -94,3 +94,35 @@ fn iso_round_trip_is_stable() {
         assert_eq!(parse_timestamp(&text), Some(offset), "tur atmadı: {text}");
     }
 }
+
+/// Saat dilimi eki bayt indeksiyle kesiliyordu ve `len()` bayt sayar: ASCII
+/// olmayan dört baytlık bir ek uzunluk denetimini geçip kesmeyi karakterin
+/// ortasına düşürüyor, `str` indekslemesi panikliyordu. Girdi kimlik
+/// doğrulaması istemeyen `POST /api/appointments` gövdesinden geldiği için
+/// bu, ağdan tetiklenebilen bir paniğe açılıyordu.
+#[test]
+fn a_non_ascii_offset_is_refused_rather_than_panicking() {
+    // "aあ" tam dört bayt (1 + 3); bayt 2 'あ' karakterinin ortasına düşer.
+    assert_eq!(parse_timestamp("2026-06-01T10:00+aあ"), None);
+    // Tek bir dört baytlık karakter de aynı kolu seçer.
+    assert_eq!(parse_timestamp("2026-06-01T10:00+😀"), None);
+    // İki baytlık ek, dilimlemeyen kola düşer ama yine reddedilmeli.
+    assert_eq!(parse_timestamp("2026-06-01T10:00+é"), None);
+    // Çift noktalı biçimde de ASCII olmayan girdi geçmemeli.
+    assert_eq!(parse_timestamp("2026-06-01T10:00+aa:bb"), None);
+}
+
+/// Ofset sınırsız bırakılırsa `hours * 60` taşar: hata ayıklama derlemesinde
+/// panik, sürüm derlemesinde sessizce yanlış saat.
+#[test]
+fn an_out_of_range_offset_is_refused_rather_than_overflowing() {
+    assert_eq!(
+        parse_timestamp("2026-06-01T10:00+9223372036854775807:00"),
+        None
+    );
+    assert_eq!(parse_timestamp("2026-06-01T10:00+99:00"), None);
+    assert_eq!(parse_timestamp("2026-06-01T10:00+01:99"), None);
+    // Geçerli uç değerler kabul edilmeye devam etmeli.
+    assert!(parse_timestamp("2026-06-01T10:00+14:00").is_some());
+    assert!(parse_timestamp("2026-06-01T10:00-1200").is_some());
+}

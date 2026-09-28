@@ -78,6 +78,13 @@ pub struct SmtpConfig {
 pub struct Config {
     pub env: String,
     pub production: bool,
+    /// Çerezin `Secure` bayrağı ve HSTS buna bağlıdır.
+    ///
+    /// `NODE_ENV` gibi bir ortam dizgisinden değil, sitenin gerçek adresinden
+    /// türetilir: bir değişkenin **yokluğu** sertleştirmeyi kapatmamalı.
+    /// Yalnızca geri döngü adresinde düz HTTP gevşetilir — tarayıcılar orayı
+    /// zaten güvenli bağlam sayar — başka her adres sıkı tarafta kalır.
+    pub secure_transport: bool,
     /// Uygulamanın önünde kaç katman **güvenilen** ters vekil olduğu.
     ///
     /// Sıfırken `X-Forwarded-For` tamamen yok sayılır ve istemci adresi soket
@@ -95,6 +102,13 @@ pub struct Config {
     pub smtp: SmtpConfig,
 }
 
+/// Adres geri döngüde düz HTTP mi? Yalnızca burada çerez `Secure` gevşetilir.
+fn is_loopback_http(origin: &str) -> bool {
+    origin.starts_with("http://localhost")
+        || origin.starts_with("http://127.0.0.1")
+        || origin.starts_with("http://[::1]")
+}
+
 fn get(env: &HashMap<String, String>, key: &str) -> Option<String> {
     // JS `env.X || fallback` boş string'i de yok sayar.
     env.get(key).filter(|value| !value.is_empty()).cloned()
@@ -105,26 +119,19 @@ pub fn load_config(env: &HashMap<String, String>) -> Result<Config, String> {
     let node_env = get(env, "NODE_ENV");
     let production = node_env.as_deref() == Some("production");
 
-    let admin_password = get(env, "ADMIN_PASSWORD").unwrap_or_else(|| {
-        if production {
-            String::new()
-        } else {
-            "development-password-change-me".into()
-        }
-    });
-    let session_secret = get(env, "SESSION_SECRET").unwrap_or_else(|| {
-        if production {
-            String::new()
-        } else {
-            "development-session-secret-change-me-now".into()
-        }
-    });
+    // Kimlik bilgileri her ortamda zorunludur. Daha önce `NODE_ENV` üretim
+    // değilse kaynakta görünen sabit bir parola devreye giriyordu; dinleyici
+    // 0.0.0.0'a bağlandığı için bu, değişkeni tanımlamayı unutan her kurulumda
+    // herkesin bildiği bir parolayla yönetici girişi demekti. Yokluk artık
+    // güvensiz bir varsayılana değil, açılmayan bir sunucuya çıkar.
+    let admin_password = get(env, "ADMIN_PASSWORD").unwrap_or_default();
+    let session_secret = get(env, "SESSION_SECRET").unwrap_or_default();
 
     if admin_password.chars().count() < 12 {
-        return Err("ADMIN_PASSWORD en az 12 karakter olmalıdır.".into());
+        return Err("ADMIN_PASSWORD tanımlanmalı ve en az 12 karakter olmalıdır.".into());
     }
     if session_secret.chars().count() < 32 {
-        return Err("SESSION_SECRET en az 32 karakter olmalıdır.".into());
+        return Err("SESSION_SECRET tanımlanmalı ve en az 32 karakter olmalıdır.".into());
     }
 
     // Varsayılan sıfır: yanlış yapılandırılmış bir kurulum güvenli tarafta kalsın.
@@ -146,6 +153,10 @@ pub fn load_config(env: &HashMap<String, String>) -> Result<Config, String> {
         .trim_end_matches('/')
         .to_string();
 
+    // Sertleştirme adresten okunur, bayraktan değil: yanlış yapılandırılmış
+    // bir kurulumda çerez `Secure` kalır ve oturum jetonu düz HTTP'ye düşmez.
+    let secure_transport = !is_loopback_http(&app_origin);
+
     let raw_database_path =
         get(env, "DATABASE_PATH").unwrap_or_else(|| "./data/appointments.sqlite".into());
     let database_path = if raw_database_path == ":memory:" {
@@ -157,6 +168,7 @@ pub fn load_config(env: &HashMap<String, String>) -> Result<Config, String> {
     Ok(Config {
         env: node_env.unwrap_or_else(|| "development".into()),
         production,
+        secure_transport,
         trusted_proxy_hops,
         port: get(env, "PORT")
             .and_then(|value| value.parse().ok())
